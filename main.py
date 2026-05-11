@@ -42,8 +42,22 @@ while True:
         price = ticker["last"]
         structure_data = analyze_market_structure(candles)
         price_action_data = analyze_candles(candles)
-        indicator_status = get_all_indicators(None)
+        indicator_status = get_all_indicators(candles)
+        fvg_data = indicator_status.get(
+            "FVG",
+            {
+                "fvg_signal": "WAIT",
+                "fvg_type": "NONE",
+                "gap_size_percent": 0.0,
+                "fvg_touched": False,
+                "rejection_after_touch": False,
+            },
+        )
         score = calculate_score(indicator_status)
+        if fvg_data["fvg_type"] == "BULLISH" and fvg_data["rejection_after_touch"]:
+            score += 1
+        elif fvg_data["fvg_type"] == "BEARISH" and fvg_data["rejection_after_touch"]:
+            score -= 1
         if (
             structure_data["structure"] == "BULLISH"
             and structure_data["structure_strength"] == "STRONG"
@@ -83,6 +97,12 @@ while True:
 
         if price_action_data["fake_breakout"]:
             signal_confidence = max(0, signal_confidence - 1)
+            opposite_fvg = (
+                (signal == "BUY" and fvg_data["fvg_type"] == "BEARISH")
+                or (signal == "SELL" and fvg_data["fvg_type"] == "BULLISH")
+            )
+            if opposite_fvg:
+                signal_confidence = max(0, signal_confidence - 1)
             if risk_level == "LOW":
                 risk_level = "MEDIUM"
             reason = f"{reason} + fake breakout risk"
@@ -120,12 +140,15 @@ while True:
             f"CANDLE_STRENGTH: {price_action_data['candle_strength']} | WICK_REJECTION: {price_action_data['wick_rejection']} | FAKE_BREAKOUT: {price_action_data['fake_breakout']} | SUPPORT_REACTION: {price_action_data['support_reaction']} | RESISTANCE_REACTION: {price_action_data['resistance_reaction']} | MOMENTUM_SHIFT: {price_action_data['momentum_shift']}"
         )
         print(
+            f"FVG_TYPE: {fvg_data['fvg_type']} | GAP_SIZE_PERCENT: {fvg_data['gap_size_percent']} | FVG_TOUCHED: {fvg_data['fvg_touched']} | REJECTION_AFTER_TOUCH: {fvg_data['rejection_after_touch']}"
+        )
+        print(
             f"RISK_LEVEL: {risk_level} | REASON: {reason} | RECOMMENDED_LEVERAGE: {dynamic_risk['recommended_leverage']} | TARGET_PROFIT_PERCENT: {dynamic_risk['target_profit_percent']}"
         )
         if ENABLE_LOGS:
             with open(log_file, "a", encoding="utf-8") as f:
                 f.write(
-                    f"{timestamp} | [ITERATION {counter}] SYMBOL: {SYMBOL} | BTC PRICE: {price} | SIGNAL: {signal} | SIGNAL_CONFIDENCE: {signal_confidence}/5 | TREND: {trend} | MARKET_STRUCTURE: {structure_data['structure']} | STRUCTURE_STRENGTH: {structure_data['structure_strength']} | TREND_CONTINUATION_CHANCE: {structure_data['trend_continuation_chance']} | REVERSAL_CHANCE: {structure_data['reversal_chance']} | LIQUIDITY_EVENT: {structure_data['liquidity_event']} | MOMENTUM: {structure_data['momentum']} | CANDLE_STRENGTH: {price_action_data['candle_strength']} | WICK_REJECTION: {price_action_data['wick_rejection']} | FAKE_BREAKOUT: {price_action_data['fake_breakout']} | SUPPORT_REACTION: {price_action_data['support_reaction']} | RESISTANCE_REACTION: {price_action_data['resistance_reaction']} | MOMENTUM_SHIFT: {price_action_data['momentum_shift']} | RISK_LEVEL: {risk_level} | REASON: {reason} | LEVERAGE: {dynamic_risk['recommended_leverage']} | TARGET_PROFIT_PERCENT: {dynamic_risk['target_profit_percent']} | INDICATORS: {indicator_status}\n"
+                    f"{timestamp} | [ITERATION {counter}] SYMBOL: {SYMBOL} | BTC PRICE: {price} | SIGNAL: {signal} | SIGNAL_CONFIDENCE: {signal_confidence}/5 | TREND: {trend} | MARKET_STRUCTURE: {structure_data['structure']} | STRUCTURE_STRENGTH: {structure_data['structure_strength']} | TREND_CONTINUATION_CHANCE: {structure_data['trend_continuation_chance']} | REVERSAL_CHANCE: {structure_data['reversal_chance']} | LIQUIDITY_EVENT: {structure_data['liquidity_event']} | MOMENTUM: {structure_data['momentum']} | CANDLE_STRENGTH: {price_action_data['candle_strength']} | WICK_REJECTION: {price_action_data['wick_rejection']} | FAKE_BREAKOUT: {price_action_data['fake_breakout']} | SUPPORT_REACTION: {price_action_data['support_reaction']} | RESISTANCE_REACTION: {price_action_data['resistance_reaction']} | MOMENTUM_SHIFT: {price_action_data['momentum_shift']} | FVG_TYPE: {fvg_data['fvg_type']} | GAP_SIZE_PERCENT: {fvg_data['gap_size_percent']} | FVG_TOUCHED: {fvg_data['fvg_touched']} | REJECTION_AFTER_TOUCH: {fvg_data['rejection_after_touch']} | RISK_LEVEL: {risk_level} | REASON: {reason} | LEVERAGE: {dynamic_risk['recommended_leverage']} | TARGET_PROFIT_PERCENT: {dynamic_risk['target_profit_percent']} | INDICATORS: {indicator_status}\n"
                 )
             with open(signals_history_file, "a", encoding="utf-8") as f:
                 f.write(f"{timestamp} | ITERATION {counter} | {signal}\n")

@@ -1,6 +1,12 @@
 import ccxt
 
-from config import CONFIRM_TIMEFRAME, OHLCV_LIMIT, SYMBOL, TREND_TIMEFRAME
+from config import (
+    CONFIRM_TIMEFRAME,
+    FVG_MIN_GAP_PERCENT,
+    OHLCV_LIMIT,
+    SYMBOL,
+    TREND_TIMEFRAME,
+)
 
 
 exchange = ccxt.mexc()
@@ -85,7 +91,95 @@ def get_rsi(data):
 
 
 def get_fvg(data):
-    return "WAIT"
+    default_response = {
+        "fvg_signal": "WAIT",
+        "fvg_type": "NONE",
+        "gap_size_percent": 0.0,
+        "fvg_touched": False,
+        "rejection_after_touch": False,
+    }
+    candles = data if data else []
+    if len(candles) < 5:
+        return default_response
+
+    best_fvg = None
+    best_gap_percent = 0.0
+
+    for idx in range(2, len(candles)):
+        candle_1 = candles[idx - 2]
+        candle_3 = candles[idx]
+
+        bullish_gap = candle_3[3] - candle_1[2]
+        bearish_gap = candle_1[3] - candle_3[2]
+
+        if bullish_gap > 0 and candle_1[2] > 0:
+            gap_percent = (bullish_gap / candle_1[2]) * 100
+            if gap_percent > best_gap_percent:
+                best_gap_percent = gap_percent
+                best_fvg = {
+                    "fvg_type": "BULLISH",
+                    "gap_low": candle_1[2],
+                    "gap_high": candle_3[3],
+                    "created_idx": idx,
+                    "gap_size_percent": round(gap_percent, 4),
+                }
+
+        if bearish_gap > 0 and candle_1[3] > 0:
+            gap_percent = (bearish_gap / candle_1[3]) * 100
+            if gap_percent > best_gap_percent:
+                best_gap_percent = gap_percent
+                best_fvg = {
+                    "fvg_type": "BEARISH",
+                    "gap_low": candle_3[2],
+                    "gap_high": candle_1[3],
+                    "created_idx": idx,
+                    "gap_size_percent": round(gap_percent, 4),
+                }
+
+    if not best_fvg or best_fvg["gap_size_percent"] < FVG_MIN_GAP_PERCENT:
+        return default_response
+
+    fvg_touched = False
+    rejection_after_touch = False
+    last_candle = candles[-1]
+    check_from = best_fvg["created_idx"] + 1
+
+    for candle in candles[check_from:]:
+        touched = candle[3] <= best_fvg["gap_high"] and candle[2] >= best_fvg["gap_low"]
+        if touched:
+            fvg_touched = True
+
+            body = abs(candle[4] - candle[1])
+            upper_wick = candle[2] - max(candle[1], candle[4])
+            lower_wick = min(candle[1], candle[4]) - candle[3]
+
+            if best_fvg["fvg_type"] == "BULLISH":
+                # Reakcja po touch: odrzucenie dolem i domknięcie bycze.
+                if candle[4] > candle[1] and lower_wick > body * 1.2:
+                    rejection_after_touch = True
+            else:
+                # Reakcja po touch: odrzucenie górą i domknięcie niedźwiedzie.
+                if candle[4] < candle[1] and upper_wick > body * 1.2:
+                    rejection_after_touch = True
+
+    fvg_signal = "WAIT"
+    if best_fvg["fvg_type"] == "BULLISH" and fvg_touched and rejection_after_touch:
+        fvg_signal = "BUY"
+    elif best_fvg["fvg_type"] == "BEARISH" and fvg_touched and rejection_after_touch:
+        fvg_signal = "SELL"
+    elif not fvg_touched:
+        if best_fvg["fvg_type"] == "BULLISH" and last_candle[4] > last_candle[1]:
+            fvg_signal = "BUY"
+        elif best_fvg["fvg_type"] == "BEARISH" and last_candle[4] < last_candle[1]:
+            fvg_signal = "SELL"
+
+    return {
+        "fvg_signal": fvg_signal,
+        "fvg_type": best_fvg["fvg_type"],
+        "gap_size_percent": best_fvg["gap_size_percent"],
+        "fvg_touched": fvg_touched,
+        "rejection_after_touch": rejection_after_touch,
+    }
 
 
 def get_bag(data):
