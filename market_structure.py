@@ -14,6 +14,8 @@ def analyze_market_structure(candles):
             "higher_low": False,
             "lower_high": False,
             "lower_low": False,
+            "structure_strength": "WEAK",
+            "trend_continuation_chance": "LOW",
             "momentum": "WEAK",
             "reversal_chance": "LOW",
             "liquidity_event": False,
@@ -28,12 +30,14 @@ def analyze_market_structure(candles):
     lower_high = highs[-1] < highs[-2]
     lower_low = lows[-1] < lows[-2]
 
-    higher_high_series = highs[-1] > highs[-2] > highs[-3]
-    lower_low_series = lows[-1] < lows[-2] < lows[-3]
+    hh_series = highs[-1] > highs[-2] > highs[-3]
+    hl_series = lows[-1] > lows[-2] > lows[-3]
+    ll_series = lows[-1] < lows[-2] < lows[-3]
+    lh_series = highs[-1] < highs[-2] < highs[-3]
 
-    if higher_high_series and higher_low:
+    if (higher_high and higher_low) or (hh_series and hl_series):
         structure = "BULLISH"
-    elif lower_low_series and lower_high:
+    elif (lower_high and lower_low) or (lh_series and ll_series):
         structure = "BEARISH"
     else:
         structure = "SIDEWAYS"
@@ -53,6 +57,33 @@ def analyze_market_structure(candles):
     )
 
     momentum = "STRONG" if strong_momentum and not weak_bounce_after_dump else "WEAK"
+
+    bullish_sequence_strength = int(higher_high) + int(higher_low) + int(hh_series) + int(hl_series)
+    bearish_sequence_strength = int(lower_high) + int(lower_low) + int(lh_series) + int(ll_series)
+
+    if structure == "BULLISH":
+        if momentum == "STRONG" and bullish_sequence_strength >= 3:
+            structure_strength = "STRONG"
+            trend_continuation_chance = "HIGH"
+        elif bullish_sequence_strength >= 2:
+            structure_strength = "MEDIUM"
+            trend_continuation_chance = "MEDIUM"
+        else:
+            structure_strength = "WEAK"
+            trend_continuation_chance = "LOW"
+    elif structure == "BEARISH":
+        if momentum == "STRONG" and bearish_sequence_strength >= 3:
+            structure_strength = "STRONG"
+            trend_continuation_chance = "HIGH"
+        elif bearish_sequence_strength >= 2:
+            structure_strength = "MEDIUM"
+            trend_continuation_chance = "MEDIUM"
+        else:
+            structure_strength = "WEAK"
+            trend_continuation_chance = "LOW"
+    else:
+        structure_strength = "WEAK"
+        trend_continuation_chance = "LOW"
 
     # Test poziomu: dotknięcie ostatniego wsparcia/oporu i reakcja zamknięciem.
     recent_support = min(lows[-6:-1])
@@ -87,7 +118,7 @@ def analyze_market_structure(candles):
     )
 
     # Dodatkowy warunek: przebicie poziomu bez reakcji i mocny follow-through.
-    if support_breakdown and no_buyer_reaction and lower_low_series and high_bearish_momentum:
+    if support_breakdown and no_buyer_reaction and ll_series and high_bearish_momentum:
         liquidity_event = True
 
     return {
@@ -96,6 +127,8 @@ def analyze_market_structure(candles):
         "higher_low": higher_low,
         "lower_high": lower_high,
         "lower_low": lower_low,
+        "structure_strength": structure_strength,
+        "trend_continuation_chance": trend_continuation_chance,
         "momentum": momentum,
         "reversal_chance": reversal_chance,
         "liquidity_event": liquidity_event,

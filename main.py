@@ -44,6 +44,18 @@ while True:
         price_action_data = analyze_candles(candles)
         indicator_status = get_all_indicators(None)
         score = calculate_score(indicator_status)
+        if (
+            structure_data["structure"] == "BULLISH"
+            and structure_data["structure_strength"] == "STRONG"
+            and structure_data["momentum"] == "STRONG"
+        ):
+            score += 1
+        elif (
+            structure_data["structure"] == "BEARISH"
+            and structure_data["structure_strength"] == "STRONG"
+            and structure_data["momentum"] == "STRONG"
+        ):
+            score -= 1
         signal = get_signal(score)
         signal_confidence = max(0, min(5, abs(score)))
         trend = "WAIT"
@@ -102,6 +114,9 @@ while True:
             f"MARKET_STRUCTURE: {structure_data['structure']} | REVERSAL_CHANCE: {structure_data['reversal_chance']} | LIQUIDITY_EVENT: {structure_data['liquidity_event']} | MOMENTUM: {structure_data['momentum']}"
         )
         print(
+            f"STRUCTURE_STRENGTH: {structure_data['structure_strength']} | TREND_CONTINUATION_CHANCE: {structure_data['trend_continuation_chance']}"
+        )
+        print(
             f"CANDLE_STRENGTH: {price_action_data['candle_strength']} | WICK_REJECTION: {price_action_data['wick_rejection']} | FAKE_BREAKOUT: {price_action_data['fake_breakout']} | SUPPORT_REACTION: {price_action_data['support_reaction']} | RESISTANCE_REACTION: {price_action_data['resistance_reaction']} | MOMENTUM_SHIFT: {price_action_data['momentum_shift']}"
         )
         print(
@@ -110,7 +125,7 @@ while True:
         if ENABLE_LOGS:
             with open(log_file, "a", encoding="utf-8") as f:
                 f.write(
-                    f"{timestamp} | [ITERATION {counter}] SYMBOL: {SYMBOL} | BTC PRICE: {price} | SIGNAL: {signal} | SIGNAL_CONFIDENCE: {signal_confidence}/5 | TREND: {trend} | MARKET_STRUCTURE: {structure_data['structure']} | REVERSAL_CHANCE: {structure_data['reversal_chance']} | LIQUIDITY_EVENT: {structure_data['liquidity_event']} | MOMENTUM: {structure_data['momentum']} | CANDLE_STRENGTH: {price_action_data['candle_strength']} | WICK_REJECTION: {price_action_data['wick_rejection']} | FAKE_BREAKOUT: {price_action_data['fake_breakout']} | SUPPORT_REACTION: {price_action_data['support_reaction']} | RESISTANCE_REACTION: {price_action_data['resistance_reaction']} | MOMENTUM_SHIFT: {price_action_data['momentum_shift']} | RISK_LEVEL: {risk_level} | REASON: {reason} | LEVERAGE: {dynamic_risk['recommended_leverage']} | TARGET_PROFIT_PERCENT: {dynamic_risk['target_profit_percent']} | INDICATORS: {indicator_status}\n"
+                    f"{timestamp} | [ITERATION {counter}] SYMBOL: {SYMBOL} | BTC PRICE: {price} | SIGNAL: {signal} | SIGNAL_CONFIDENCE: {signal_confidence}/5 | TREND: {trend} | MARKET_STRUCTURE: {structure_data['structure']} | STRUCTURE_STRENGTH: {structure_data['structure_strength']} | TREND_CONTINUATION_CHANCE: {structure_data['trend_continuation_chance']} | REVERSAL_CHANCE: {structure_data['reversal_chance']} | LIQUIDITY_EVENT: {structure_data['liquidity_event']} | MOMENTUM: {structure_data['momentum']} | CANDLE_STRENGTH: {price_action_data['candle_strength']} | WICK_REJECTION: {price_action_data['wick_rejection']} | FAKE_BREAKOUT: {price_action_data['fake_breakout']} | SUPPORT_REACTION: {price_action_data['support_reaction']} | RESISTANCE_REACTION: {price_action_data['resistance_reaction']} | MOMENTUM_SHIFT: {price_action_data['momentum_shift']} | RISK_LEVEL: {risk_level} | REASON: {reason} | LEVERAGE: {dynamic_risk['recommended_leverage']} | TARGET_PROFIT_PERCENT: {dynamic_risk['target_profit_percent']} | INDICATORS: {indicator_status}\n"
                 )
             with open(signals_history_file, "a", encoding="utf-8") as f:
                 f.write(f"{timestamp} | ITERATION {counter} | {signal}\n")
