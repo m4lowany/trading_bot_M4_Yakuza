@@ -1,18 +1,16 @@
 import ccxt
 
-from config import CONFIRM_TIMEFRAME, TREND_TIMEFRAME
+from config import CONFIRM_TIMEFRAME, OHLCV_LIMIT, SYMBOL, TREND_TIMEFRAME
 
 
 exchange = ccxt.mexc()
 
 
 def get_ma60(data):
-    symbol = "BTC/USDT"
-    limit = 100
     period = 60
 
     try:
-        candles = exchange.fetch_ohlcv(symbol, timeframe=TREND_TIMEFRAME, limit=limit)
+        candles = exchange.fetch_ohlcv(SYMBOL, timeframe=TREND_TIMEFRAME, limit=OHLCV_LIMIT)
         closes = [candle[4] for candle in candles]
         if len(closes) < period:
             return "WAIT"
@@ -30,12 +28,10 @@ def get_ma60(data):
 
 
 def get_ema238(data):
-    symbol = "BTC/USDT"
-    limit = 300
     period = 238
 
     try:
-        candles = exchange.fetch_ohlcv(symbol, timeframe=TREND_TIMEFRAME, limit=limit)
+        candles = exchange.fetch_ohlcv(SYMBOL, timeframe=TREND_TIMEFRAME, limit=OHLCV_LIMIT)
         closes = [candle[4] for candle in candles]
         if len(closes) < period:
             return "WAIT"
@@ -57,12 +53,10 @@ def get_ema238(data):
 
 
 def get_rsi(data):
-    symbol = "BTC/USDT"
-    limit = 100
     period = 14
 
     try:
-        candles = exchange.fetch_ohlcv(symbol, timeframe=CONFIRM_TIMEFRAME, limit=limit)
+        candles = exchange.fetch_ohlcv(SYMBOL, timeframe=CONFIRM_TIMEFRAME, limit=OHLCV_LIMIT)
         closes = [candle[4] for candle in candles]
         if len(closes) < period + 1:
             return "WAIT"
