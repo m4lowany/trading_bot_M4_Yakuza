@@ -6,11 +6,18 @@ def can_trade(signal):
 
 
 def calculate_dynamic_leverage(move_percent, risk_level, signal=None, trade_allowed=True):
-    if signal == "WAIT" or not trade_allowed:
+    if signal == "WAIT":
         return {
             "recommended_leverage": 0,
             "target_profit_percent": 0,
             "reason": "no trade / wait signal",
+        }
+
+    if not trade_allowed:
+        return {
+            "recommended_leverage": 0,
+            "target_profit_percent": 0,
+            "reason": "trade not allowed",
         }
 
     abs_move = abs(move_percent)

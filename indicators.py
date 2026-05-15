@@ -1,93 +1,83 @@
-import ccxt
-
-from config import (
-    CONFIRM_TIMEFRAME,
-    FVG_MIN_GAP_PERCENT,
-    OHLCV_LIMIT,
-    SYMBOL,
-    TREND_TIMEFRAME,
-)
-
-
-exchange = ccxt.mexc()
+from config import FVG_MIN_GAP_PERCENT
+from utils import validate_candles
 
 
 def get_ma60(data):
     period = 60
 
-    try:
-        candles = exchange.fetch_ohlcv(SYMBOL, timeframe=TREND_TIMEFRAME, limit=OHLCV_LIMIT)
-        closes = [candle[4] for candle in candles]
-        if len(closes) < period:
-            return "WAIT"
-
-        ma60 = sum(closes[-period:]) / period
-        current_price = closes[-1]
-
-        if current_price > ma60:
-            return "BUY"
-        if current_price < ma60:
-            return "SELL"
+    if not validate_candles(data, min_length=period):
         return "WAIT"
-    except Exception:
+
+    candles = data
+    closes = [candle[4] for candle in candles]
+    if len(closes) < period:
         return "WAIT"
+
+    ma60 = sum(closes[-period:]) / period
+    current_price = closes[-1]
+
+    if current_price > ma60:
+        return "BUY"
+    if current_price < ma60:
+        return "SELL"
+    return "WAIT"
 
 
 def get_ema238(data):
     period = 238
 
-    try:
-        candles = exchange.fetch_ohlcv(SYMBOL, timeframe=TREND_TIMEFRAME, limit=OHLCV_LIMIT)
-        closes = [candle[4] for candle in candles]
-        if len(closes) < period:
-            return "WAIT"
-
-        multiplier = 2 / (period + 1)
-        ema = sum(closes[:period]) / period
-
-        for close in closes[period:]:
-            ema = ((close - ema) * multiplier) + ema
-
-        current_price = closes[-1]
-        if current_price > ema:
-            return "BUY"
-        if current_price < ema:
-            return "SELL"
+    if not validate_candles(data, min_length=period):
         return "WAIT"
-    except Exception:
+
+    candles = data
+    closes = [candle[4] for candle in candles]
+    if len(closes) < period:
         return "WAIT"
+
+    multiplier = 2 / (period + 1)
+    ema = sum(closes[:period]) / period
+
+    for close in closes[period:]:
+        ema = ((close - ema) * multiplier) + ema
+
+    current_price = closes[-1]
+    if current_price > ema:
+        return "BUY"
+    if current_price < ema:
+        return "SELL"
+    return "WAIT"
 
 
 def get_rsi(data):
     period = 14
 
-    try:
-        candles = exchange.fetch_ohlcv(SYMBOL, timeframe=CONFIRM_TIMEFRAME, limit=OHLCV_LIMIT)
-        closes = [candle[4] for candle in candles]
-        if len(closes) < period + 1:
-            return "WAIT"
-
-        deltas = [closes[i] - closes[i - 1] for i in range(1, len(closes))]
-        recent_deltas = deltas[-period:]
-        gains = [delta for delta in recent_deltas if delta > 0]
-        losses = [-delta for delta in recent_deltas if delta < 0]
-
-        avg_gain = sum(gains) / period
-        avg_loss = sum(losses) / period
-
-        if avg_loss == 0:
-            rsi = 100
-        else:
-            rs = avg_gain / avg_loss
-            rsi = 100 - (100 / (1 + rs))
-
-        if rsi > 70:
-            return "SELL"
-        if rsi < 30:
-            return "BUY"
+    if not validate_candles(data, min_length=period + 1):
         return "WAIT"
-    except Exception:
+
+    candles = data
+    closes = [candle[4] for candle in candles]
+    if len(closes) < period + 1:
         return "WAIT"
+
+    deltas = [closes[i] - closes[i - 1] for i in range(1, len(closes))]
+    recent_deltas = deltas[-period:]
+    gains = [delta for delta in recent_deltas if delta > 0]
+    losses = [-delta for delta in recent_deltas if delta < 0]
+
+    avg_gain = sum(gains) / period
+    avg_loss = sum(losses) / period
+
+    if avg_loss == 0:
+        rsi = 100
+    else:
+        rs = avg_gain / avg_loss
+        rsi = 100 - (100 / (1 + rs))
+
+    if rsi > 70:
+        return "SELL"
+    if rsi < 30:
+        return "BUY"
+    return "WAIT"
 
 
 def get_fvg(data):
@@ -98,7 +88,10 @@ def get_fvg(data):
         "fvg_touched": False,
         "rejection_after_touch": False,
     }
-    candles = data if data else []
+    if not validate_candles(data, min_length=5):
+        return default_response
+
+    candles = data
     if len(candles) < 5:
         return default_response
 
