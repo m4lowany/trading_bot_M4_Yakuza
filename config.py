@@ -8,7 +8,8 @@ ENABLE_LOGS = True
 DEBUG_MODE = True
 TREND_TIMEFRAME = "30m"
 CONFIRM_TIMEFRAME = "15m"
-ENTRY_TIMEFRAME = "3m"
+# MEXC spot OHLCV may not support 3m, use 5m for entry until futures/feed mapping is added.
+ENTRY_TIMEFRAME = "5m"
 OHLCV_LIMIT = 300
 INDICATORS = ["MA60", "EMA238", "RSI", "FVG", "BAG", "FIBO"]
 FVG_MIN_GAP_PERCENT = 0.05
