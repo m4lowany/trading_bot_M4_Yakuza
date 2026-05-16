@@ -24,6 +24,7 @@ from timeframe_analysis import (
     apply_alignment_final_filter,
     apply_alignment_to_confidence,
 )
+from paper_trader import process_paper_trading
 from utils import validate_candles, validate_timeframes
 
 TREND_TIMEFRAME, CONFIRM_TIMEFRAME, ENTRY_TIMEFRAME = validate_timeframes(
@@ -241,6 +242,23 @@ while True:
         print(
             f"RISK_LEVEL: {risk_level} | REASON: {reason} | RECOMMENDED_LEVERAGE: {dynamic_risk['recommended_leverage']} | TARGET_PROFIT_PERCENT: {dynamic_risk['target_profit_percent']}"
         )
+
+        paper_logs = process_paper_trading(
+            log_dir,
+            current_price=price,
+            signal=signal,
+            trade_allowed=trade_allowed,
+            signal_confidence=signal_confidence,
+            entry_quality=entry_quality,
+            tf_alignment=tf_alignment,
+            leverage=dynamic_risk["recommended_leverage"],
+            target_profit_percent=dynamic_risk["target_profit_percent"],
+            reason=reason,
+            timestamp=timestamp,
+        )
+        for line in paper_logs:
+            print(line)
+
         if ENABLE_LOGS:
             with open(log_file, "a", encoding="utf-8") as f:
                 f.write(
