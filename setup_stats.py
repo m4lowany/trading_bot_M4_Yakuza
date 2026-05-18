@@ -236,6 +236,55 @@ def _match_snapshot_for_trade(
     return None
 
 
+def _nested_structure_events(snap: Dict[str, Any]) -> Dict[str, Any]:
+    nested = snap.get("structure_events")
+    return nested if isinstance(nested, dict) else {}
+
+
+def _snapshot_string_field(snap: Dict[str, Any], flat_key: str, nested_key: str) -> str:
+    if flat_key in snap and snap[flat_key] is not None:
+        return str(snap[flat_key])
+    nested = _nested_structure_events(snap)
+    if nested_key in nested and nested[nested_key] is not None:
+        return str(nested[nested_key])
+    return "UNKNOWN"
+
+
+def _snapshot_bool_field(snap: Dict[str, Any], flat_key: str) -> bool:
+    if flat_key in snap:
+        return bool(snap[flat_key])
+    nested = _nested_structure_events(snap)
+    if flat_key in nested:
+        return bool(nested[flat_key])
+    return False
+
+
+def _apply_structure_fields_from_snapshot(
+    target: Dict[str, Any], snap: Optional[Dict[str, Any]]
+) -> None:
+    if not snap:
+        target.setdefault("structure_event_bos", "UNKNOWN")
+        target.setdefault("structure_event_choch", "UNKNOWN")
+        target.setdefault("control_shift", "UNKNOWN")
+        target.setdefault("buyers_take_control", False)
+        target.setdefault("sellers_take_control", False)
+        target.setdefault("structure_event_strength", "UNKNOWN")
+        return
+
+    target["structure_event_bos"] = _snapshot_string_field(
+        snap, "structure_event_bos", "bos"
+    )
+    target["structure_event_choch"] = _snapshot_string_field(
+        snap, "structure_event_choch", "choch"
+    )
+    target["control_shift"] = _snapshot_string_field(snap, "control_shift", "control_shift")
+    target["buyers_take_control"] = _snapshot_bool_field(snap, "buyers_take_control")
+    target["sellers_take_control"] = _snapshot_bool_field(snap, "sellers_take_control")
+    target["structure_event_strength"] = _snapshot_string_field(
+        snap, "structure_event_strength", "event_strength"
+    )
+
+
 def _enrich_trade(trade: Dict[str, Any], snapshots: List[Dict[str, Any]]) -> Dict[str, Any]:
     enriched = dict(trade)
     snap = _match_snapshot_for_trade(trade, snapshots)
@@ -243,11 +292,13 @@ def _enrich_trade(trade: Dict[str, Any], snapshots: List[Dict[str, Any]]) -> Dic
         enriched["setup_type"] = snap.get("setup_type", "UNKNOWN")
         enriched["setup_quality"] = snap.get("setup_quality", "UNKNOWN")
         enriched["tf_alignment"] = snap.get("tf_alignment", "UNKNOWN")
+        _apply_structure_fields_from_snapshot(enriched, snap)
     else:
         from_reason = _setup_type_from_reason(str(trade.get("reason", "")))
         enriched["setup_type"] = from_reason or "UNKNOWN"
         enriched["setup_quality"] = trade.get("entry_quality", "UNKNOWN")
         enriched["tf_alignment"] = "UNKNOWN"
+        _apply_structure_fields_from_snapshot(enriched, None)
     return enriched
 
 
@@ -270,6 +321,31 @@ def _win_rate(trades: List[Dict[str, Any]]) -> float:
     return _pct(wins, len(trades))
 
 
+def _breakdown_row(group: List[Dict[str, Any]], *, has_pnl: bool = True) -> Dict[str, Any]:
+    count = len(group)
+    if not has_pnl or count == 0:
+        return {
+            "count": count,
+            "wins": 0,
+            "losses": 0,
+            "win_rate": 0.0,
+            "average_pnl": None,
+            "has_pnl": False,
+        }
+
+    pnls = [float(t.get("pnl_percent", 0)) for t in group]
+    wins = sum(1 for p in pnls if p > 0)
+    losses = count - wins
+    return {
+        "count": count,
+        "wins": wins,
+        "losses": losses,
+        "win_rate": _pct(wins, count),
+        "average_pnl": _avg(pnls),
+        "has_pnl": True,
+    }
+
+
 def _breakdown(trades: List[Dict[str, Any]], key: str) -> Dict[str, Dict[str, Any]]:
     groups: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
     for trade in trades:
@@ -278,13 +354,55 @@ def _breakdown(trades: List[Dict[str, Any]], key: str) -> Dict[str, Dict[str, An
 
     result: Dict[str, Dict[str, Any]] = {}
     for label, group in sorted(groups.items()):
-        pnls = [float(t.get("pnl_percent", 0)) for t in group]
-        result[label] = {
-            "count": len(group),
-            "win_rate": _win_rate(group),
-            "average_pnl": _avg(pnls),
-        }
+        result[label] = _breakdown_row(group, has_pnl=True)
     return result
+
+
+def _snapshot_count_breakdown(
+    snapshots: List[Dict[str, Any]], key: str, *, bool_field: bool = False
+) -> Dict[str, Dict[str, Any]]:
+    groups: Dict[str, int] = defaultdict(int)
+    for snap in snapshots:
+        if bool_field:
+            label = str(_snapshot_bool_field(snap, key))
+        elif key == "structure_event_bos":
+            label = _snapshot_string_field(snap, "structure_event_bos", "bos")
+        elif key == "structure_event_choch":
+            label = _snapshot_string_field(snap, "structure_event_choch", "choch")
+        elif key == "control_shift":
+            label = _snapshot_string_field(snap, "control_shift", "control_shift")
+        elif key == "structure_event_strength":
+            label = _snapshot_string_field(snap, "structure_event_strength", "event_strength")
+        else:
+            label = str(snap.get(key, "UNKNOWN"))
+        groups[label] += 1
+
+    return {
+        label: {
+            "count": count,
+            "wins": 0,
+            "losses": 0,
+            "win_rate": 0.0,
+            "average_pnl": None,
+            "has_pnl": False,
+        }
+        for label, count in sorted(groups.items())
+    }
+
+
+def _breakdown_composite(
+    items: List[Dict[str, Any]], keys: List[str], *, has_pnl: bool
+) -> Dict[str, Dict[str, Any]]:
+    groups: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+    for item in items:
+        parts = [str(item.get(k, "UNKNOWN")) for k in keys]
+        label = " | ".join(parts)
+        groups[label].append(item)
+
+    return {
+        label: _breakdown_row(group, has_pnl=has_pnl)
+        for label, group in sorted(groups.items())
+    }
 
 
 def _best_worst_setup_type(trades: List[Dict[str, Any]]) -> Dict[str, str]:
@@ -345,6 +463,69 @@ def generate_stats(log_dir: str = "logs") -> Dict[str, Any]:
 
     best_worst = _best_worst_setup_type(enriched_trades)
 
+    structure_bos_snapshots = _snapshot_count_breakdown(
+        snapshots, "structure_event_bos"
+    )
+    structure_choch_snapshots = _snapshot_count_breakdown(
+        snapshots, "structure_event_choch"
+    )
+    control_shift_snapshots = _snapshot_count_breakdown(snapshots, "control_shift")
+    buyers_snapshots = _snapshot_count_breakdown(
+        snapshots, "buyers_take_control", bool_field=True
+    )
+    sellers_snapshots = _snapshot_count_breakdown(
+        snapshots, "sellers_take_control", bool_field=True
+    )
+    strength_snapshots = _snapshot_count_breakdown(
+        snapshots, "structure_event_strength"
+    )
+
+    structure_bos_trades = _breakdown(enriched_trades, "structure_event_bos")
+    structure_choch_trades = _breakdown(enriched_trades, "structure_event_choch")
+    control_shift_trades = _breakdown(enriched_trades, "control_shift")
+    buyers_trades = _breakdown(enriched_trades, "buyers_take_control")
+    sellers_trades = _breakdown(enriched_trades, "sellers_take_control")
+    strength_trades = _breakdown(enriched_trades, "structure_event_strength")
+
+    setup_type_choch_trades = _breakdown_composite(
+        enriched_trades,
+        ["setup_type", "structure_event_choch"],
+        has_pnl=True,
+    )
+    setup_type_bos_trades = _breakdown_composite(
+        enriched_trades,
+        ["setup_type", "structure_event_bos"],
+        has_pnl=True,
+    )
+    setup_quality_strength_trades = _breakdown_composite(
+        enriched_trades,
+        ["setup_quality", "structure_event_strength"],
+        has_pnl=True,
+    )
+
+    setup_type_choch_snapshots = _breakdown_composite(
+        snapshots,
+        ["setup_type", "structure_event_choch"],
+        has_pnl=False,
+    )
+    setup_type_bos_snapshots = _breakdown_composite(
+        snapshots,
+        ["setup_type", "structure_event_bos"],
+        has_pnl=False,
+    )
+    setup_quality_strength_snapshots = _breakdown_composite(
+        snapshots,
+        ["setup_quality", "structure_event_strength"],
+        has_pnl=False,
+    )
+
+    snapshots_with_structure = sum(
+        1
+        for s in snapshots
+        if _snapshot_string_field(s, "structure_event_bos", "bos") != "UNKNOWN"
+        or _nested_structure_events(s)
+    )
+
     return {
         "total_snapshots": len(snapshots),
         "total_setups": len(qualifying_setups),
@@ -373,7 +554,56 @@ def generate_stats(log_dir: str = "logs") -> Dict[str, Any]:
             enriched_trades, "TREND_CONTINUATION"
         ),
         "pullback_setups": _setup_type_trade_stats(enriched_trades, "PULLBACK_ENTRY"),
+        "snapshots_with_structure_fields": snapshots_with_structure,
+        "structure_event_snapshot_counts": {
+            "structure_event_bos": structure_bos_snapshots,
+            "structure_event_choch": structure_choch_snapshots,
+            "control_shift": control_shift_snapshots,
+            "buyers_take_control": buyers_snapshots,
+            "sellers_take_control": sellers_snapshots,
+            "structure_event_strength": strength_snapshots,
+        },
+        "structure_event_trade_performance": {
+            "structure_event_bos": structure_bos_trades,
+            "structure_event_choch": structure_choch_trades,
+            "control_shift": control_shift_trades,
+            "buyers_take_control": buyers_trades,
+            "sellers_take_control": sellers_trades,
+            "structure_event_strength": strength_trades,
+        },
+        "structure_event_cross_snapshot_counts": {
+            "setup_type_structure_event_choch": setup_type_choch_snapshots,
+            "setup_type_structure_event_bos": setup_type_bos_snapshots,
+            "setup_quality_structure_event_strength": setup_quality_strength_snapshots,
+        },
+        "structure_event_cross_trade_performance": {
+            "setup_type_structure_event_choch": setup_type_choch_trades,
+            "setup_type_structure_event_bos": setup_type_bos_trades,
+            "setup_quality_structure_event_strength": setup_quality_strength_trades,
+        },
     }
+
+
+def _format_breakdown_lines(
+    breakdown: Dict[str, Dict[str, Any]], *, show_pnl: bool, empty_msg: str = "  (no data)"
+) -> List[str]:
+    if not breakdown:
+        return [empty_msg]
+
+    lines = []
+    for label, row in breakdown.items():
+        count = row.get("count", 0)
+        if show_pnl and row.get("has_pnl"):
+            avg = row.get("average_pnl")
+            pnl_str = f"{avg:+.4f}%" if avg is not None else "n/a"
+            lines.append(
+                f"  {label:42} count={count:5}  wins={row.get('wins', 0):3}  "
+                f"losses={row.get('losses', 0):3}  win_rate={row.get('win_rate', 0):6}%  "
+                f"avg_pnl={pnl_str}"
+            )
+        else:
+            lines.append(f"  {label:42} count={count:5}")
+    return lines
 
 
 def format_stats_report(stats: Dict[str, Any]) -> str:
@@ -398,15 +628,13 @@ def format_stats_report(stats: Dict[str, Any]) -> str:
         "--- Setup type performance (closed trades) ---",
     ]
 
-    breakdown = stats.get("setup_type_breakdown", {})
-    if not breakdown:
-        lines.append("  (no closed trades yet)")
-    else:
-        for label, row in breakdown.items():
-            lines.append(
-                f"  {label:22} count={row['count']:3}  "
-                f"win_rate={row['win_rate']:6}%  avg_pnl={row['average_pnl']:+.4f}%"
-            )
+    lines.extend(
+        _format_breakdown_lines(
+            stats.get("setup_type_breakdown", {}),
+            show_pnl=True,
+            empty_msg="  (no closed trades yet)",
+        )
+    )
 
     lines.extend(
         [
@@ -414,31 +642,143 @@ def format_stats_report(stats: Dict[str, Any]) -> str:
             "--- By setup_quality ---",
         ]
     )
-    for label, row in stats.get("breakdown_by_setup_quality", {}).items():
-        lines.append(
-            f"  {label:10} count={row['count']:3}  "
-            f"win_rate={row['win_rate']:6}%  avg_pnl={row['average_pnl']:+.4f}%"
+    lines.extend(
+        _format_breakdown_lines(
+            stats.get("breakdown_by_setup_quality", {}), show_pnl=True
         )
-    if not stats.get("breakdown_by_setup_quality"):
-        lines.append("  (no data)")
+    )
 
     lines.extend(["", "--- By entry_quality ---"])
-    for label, row in stats.get("breakdown_by_entry_quality", {}).items():
-        lines.append(
-            f"  {label:10} count={row['count']:3}  "
-            f"win_rate={row['win_rate']:6}%  avg_pnl={row['average_pnl']:+.4f}%"
+    lines.extend(
+        _format_breakdown_lines(
+            stats.get("breakdown_by_entry_quality", {}), show_pnl=True
         )
-    if not stats.get("breakdown_by_entry_quality"):
-        lines.append("  (no data)")
+    )
 
     lines.extend(["", "--- By tf_alignment ---"])
-    for label, row in stats.get("breakdown_by_tf_alignment", {}).items():
-        lines.append(
-            f"  {label:16} count={row['count']:3}  "
-            f"win_rate={row['win_rate']:6}%  avg_pnl={row['average_pnl']:+.4f}%"
+    lines.extend(
+        _format_breakdown_lines(
+            stats.get("breakdown_by_tf_alignment", {}), show_pnl=True
         )
-    if not stats.get("breakdown_by_tf_alignment"):
-        lines.append("  (no data)")
+    )
+
+    snap_struct = stats.get("snapshots_with_structure_fields", 0)
+    lines.extend(
+        [
+            "",
+            "===== STRUCTURE EVENTS (setup_history.jsonl) =====",
+            "",
+            f"Snapshots total:              {stats.get('total_snapshots', 0)}",
+            f"With structure fields:        {snap_struct}",
+            "",
+            "--- Snapshot counts: structure_event_bos ---",
+        ]
+    )
+    snap_counts = stats.get("structure_event_snapshot_counts", {})
+    lines.extend(
+        _format_breakdown_lines(snap_counts.get("structure_event_bos", {}), show_pnl=False)
+    )
+    lines.extend(["", "--- Snapshot counts: structure_event_choch ---"])
+    lines.extend(
+        _format_breakdown_lines(snap_counts.get("structure_event_choch", {}), show_pnl=False)
+    )
+    lines.extend(["", "--- Snapshot counts: control_shift ---"])
+    lines.extend(
+        _format_breakdown_lines(snap_counts.get("control_shift", {}), show_pnl=False)
+    )
+    lines.extend(["", "--- Snapshot counts: buyers_take_control ---"])
+    lines.extend(
+        _format_breakdown_lines(snap_counts.get("buyers_take_control", {}), show_pnl=False)
+    )
+    lines.extend(["", "--- Snapshot counts: sellers_take_control ---"])
+    lines.extend(
+        _format_breakdown_lines(snap_counts.get("sellers_take_control", {}), show_pnl=False)
+    )
+    lines.extend(["", "--- Snapshot counts: structure_event_strength ---"])
+    lines.extend(
+        _format_breakdown_lines(
+            snap_counts.get("structure_event_strength", {}), show_pnl=False
+        )
+    )
+
+    cross_snap = stats.get("structure_event_cross_snapshot_counts", {})
+    lines.extend(["", "--- Snapshot counts: setup_type + structure_event_choch ---"])
+    lines.extend(
+        _format_breakdown_lines(
+            cross_snap.get("setup_type_structure_event_choch", {}), show_pnl=False
+        )
+    )
+    lines.extend(["", "--- Snapshot counts: setup_type + structure_event_bos ---"])
+    lines.extend(
+        _format_breakdown_lines(
+            cross_snap.get("setup_type_structure_event_bos", {}), show_pnl=False
+        )
+    )
+    lines.extend(["", "--- Snapshot counts: setup_quality + structure_event_strength ---"])
+    lines.extend(
+        _format_breakdown_lines(
+            cross_snap.get("setup_quality_structure_event_strength", {}),
+            show_pnl=False,
+        )
+    )
+
+    trade_perf = stats.get("structure_event_trade_performance", {})
+    lines.extend(
+        [
+            "",
+            "===== STRUCTURE EVENTS (closed paper trades @ entry snapshot) =====",
+            "",
+            f"Closed trades:                {stats.get('total_paper_trades', 0)}",
+            "",
+            "--- Trades: structure_event_bos ---",
+        ]
+    )
+    lines.extend(
+        _format_breakdown_lines(trade_perf.get("structure_event_bos", {}), show_pnl=True)
+    )
+    lines.extend(["", "--- Trades: structure_event_choch ---"])
+    lines.extend(
+        _format_breakdown_lines(trade_perf.get("structure_event_choch", {}), show_pnl=True)
+    )
+    lines.extend(["", "--- Trades: control_shift ---"])
+    lines.extend(
+        _format_breakdown_lines(trade_perf.get("control_shift", {}), show_pnl=True)
+    )
+    lines.extend(["", "--- Trades: buyers_take_control ---"])
+    lines.extend(
+        _format_breakdown_lines(trade_perf.get("buyers_take_control", {}), show_pnl=True)
+    )
+    lines.extend(["", "--- Trades: sellers_take_control ---"])
+    lines.extend(
+        _format_breakdown_lines(trade_perf.get("sellers_take_control", {}), show_pnl=True)
+    )
+    lines.extend(["", "--- Trades: structure_event_strength ---"])
+    lines.extend(
+        _format_breakdown_lines(
+            trade_perf.get("structure_event_strength", {}), show_pnl=True
+        )
+    )
+
+    cross_trade = stats.get("structure_event_cross_trade_performance", {})
+    lines.extend(["", "--- Trades: setup_type + structure_event_choch ---"])
+    lines.extend(
+        _format_breakdown_lines(
+            cross_trade.get("setup_type_structure_event_choch", {}), show_pnl=True
+        )
+    )
+    lines.extend(["", "--- Trades: setup_type + structure_event_bos ---"])
+    lines.extend(
+        _format_breakdown_lines(
+            cross_trade.get("setup_type_structure_event_bos", {}), show_pnl=True
+        )
+    )
+    lines.extend(["", "--- Trades: setup_quality + structure_event_strength ---"])
+    lines.extend(
+        _format_breakdown_lines(
+            cross_trade.get("setup_quality_structure_event_strength", {}),
+            show_pnl=True,
+        )
+    )
 
     rev = stats.get("reversal_setups", {})
     trend = stats.get("trend_continuation_setups", {})
