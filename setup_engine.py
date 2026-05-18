@@ -4,6 +4,8 @@ MTF setup classifier: bias (30m) + context (15m) + entry trigger (5m).
 Sits above the legacy alignment filter; does not replace scoring/signals.
 """
 
+from typing import Any, Dict
+
 
 def _default_setup():
     return {
@@ -125,6 +127,35 @@ def _confirm_not_opposing_trend(trend_bias, confirm_bias):
     return True
 
 
+def _apply_sideways_continuation_penalty(
+    setup: Dict[str, Any], entry_structure_data: Dict[str, Any]
+) -> Dict[str, Any]:
+    """
+    Soft filter: weak continuation in sideways entry structure.
+    Only TREND_CONTINUATION; does not affect PULLBACK_ENTRY or REVERSAL_ATTEMPT.
+    """
+    if setup.get("setup_type") != "TREND_CONTINUATION":
+        return setup
+
+    structure = entry_structure_data.get("structure", "SIDEWAYS")
+    strength = entry_structure_data.get("structure_strength", "WEAK")
+    if structure != "SIDEWAYS" or strength != "WEAK":
+        return setup
+
+    adjusted = dict(setup)
+    reasons = list(adjusted.get("setup_reasons", []))
+    if "sideways continuation penalty" not in reasons:
+        reasons.append("sideways continuation penalty")
+    adjusted["setup_reasons"] = reasons
+
+    quality = adjusted.get("setup_quality", "LOW")
+    if quality == "HIGH":
+        adjusted["setup_quality"] = "MEDIUM"
+    adjusted["setup_confidence_penalty"] = int(adjusted.get("setup_confidence_penalty", 0)) + 1
+
+    return adjusted
+
+
 def _grade_setup_quality(
     *,
     trend_strength,
@@ -234,12 +265,15 @@ def detect_setup(
                 fake_breakout=fake_breakout,
                 alignment=alignment,
             )
-            return {
-                "setup_type": "TREND_CONTINUATION",
-                "setup_direction": "BUY",
-                "setup_quality": quality,
-                "setup_reasons": setup_reasons,
-            }
+            return _apply_sideways_continuation_penalty(
+                {
+                    "setup_type": "TREND_CONTINUATION",
+                    "setup_direction": "BUY",
+                    "setup_quality": quality,
+                    "setup_reasons": setup_reasons,
+                },
+                entry_s,
+            )
 
     if _is_bearish_tf(trend_tf_data) and _is_bearish_tf(confirm_tf_data):
         if entry_signal == "SELL" or (entry_signal == "WAIT" and has_bear_trigger):
@@ -255,12 +289,15 @@ def detect_setup(
                 fake_breakout=fake_breakout,
                 alignment=alignment,
             )
-            return {
-                "setup_type": "TREND_CONTINUATION",
-                "setup_direction": "SELL",
-                "setup_quality": quality,
-                "setup_reasons": setup_reasons,
-            }
+            return _apply_sideways_continuation_penalty(
+                {
+                    "setup_type": "TREND_CONTINUATION",
+                    "setup_direction": "SELL",
+                    "setup_quality": quality,
+                    "setup_reasons": setup_reasons,
+                },
+                entry_s,
+            )
 
     # --- PULLBACK_ENTRY: MIXED alignment but pullback with trend + entry trigger ---
 
@@ -393,12 +430,15 @@ def detect_setup(
             fake_breakout=fake_breakout,
             alignment=alignment,
         )
-        return {
-            "setup_type": "TREND_CONTINUATION",
-            "setup_direction": "BUY",
-            "setup_quality": quality,
-            "setup_reasons": setup_reasons,
-        }
+        return _apply_sideways_continuation_penalty(
+            {
+                "setup_type": "TREND_CONTINUATION",
+                "setup_direction": "BUY",
+                "setup_quality": quality,
+                "setup_reasons": setup_reasons,
+            },
+            entry_s,
+        )
 
     if alignment == "FULL_BEARISH" and entry_signal == "WAIT" and has_bear_trigger:
         setup_reasons = list(reasons) + ["FULL_BEARISH signals; entry WAIT + bearish trigger"]
@@ -412,12 +452,15 @@ def detect_setup(
             fake_breakout=fake_breakout,
             alignment=alignment,
         )
-        return {
-            "setup_type": "TREND_CONTINUATION",
-            "setup_direction": "SELL",
-            "setup_quality": quality,
-            "setup_reasons": setup_reasons,
-        }
+        return _apply_sideways_continuation_penalty(
+            {
+                "setup_type": "TREND_CONTINUATION",
+                "setup_direction": "SELL",
+                "setup_quality": quality,
+                "setup_reasons": setup_reasons,
+            },
+            entry_s,
+        )
 
     return {
         "setup_type": "NO_SETUP",
@@ -468,10 +511,12 @@ def resolve_paper_from_setup(
         paper_signal = setup_direction
         paper_source = f"setup_engine:{setup_type}"
         paper_entry_quality = setup_quality
+        confidence_penalty = int(setup.get("setup_confidence_penalty", 0))
         if setup_quality == "HIGH":
-            paper_confidence = max(signal_confidence, 4)
+            paper_confidence = max(signal_confidence, 4) - confidence_penalty
         else:
-            paper_confidence = max(signal_confidence, 3)
+            paper_confidence = max(signal_confidence, 3) - confidence_penalty
+        paper_confidence = max(0, min(5, paper_confidence))
         if not liquidity_event:
             paper_trade_allowed = True
 
