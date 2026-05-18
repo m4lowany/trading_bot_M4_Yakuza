@@ -25,6 +25,9 @@ from timeframe_analysis import (
     apply_alignment_to_confidence,
 )
 from paper_trader import process_paper_trading
+from setup_engine import detect_setup, resolve_paper_from_setup
+from setup_stats import save_setup_snapshot
+from structure_events import analyze_structure_events
 from utils import validate_candles, validate_timeframes
 
 TREND_TIMEFRAME, CONFIRM_TIMEFRAME, ENTRY_TIMEFRAME = validate_timeframes(
@@ -200,11 +203,37 @@ while True:
                 risk_level = "MEDIUM"
             reason = f"{reason} + fake breakout risk"
 
+        setup_data = detect_setup(
+            trend_tf,
+            confirm_tf,
+            entry_tf,
+            price_action_data,
+            fvg_data,
+        )
+        setup_type = setup_data["setup_type"]
+        setup_direction = setup_data["setup_direction"]
+        setup_quality = setup_data["setup_quality"]
+        setup_reasons = setup_data["setup_reasons"]
+
+        paper_ctx = resolve_paper_from_setup(
+            signal=signal,
+            trade_allowed=trade_allowed,
+            entry_quality=entry_quality,
+            signal_confidence=signal_confidence,
+            setup=setup_data,
+            liquidity_event=structure_data["liquidity_event"],
+        )
+        paper_signal = paper_ctx["paper_signal"]
+        paper_trade_allowed = paper_ctx["paper_trade_allowed"]
+        paper_entry_quality = paper_ctx["paper_entry_quality"]
+        paper_confidence = paper_ctx["paper_confidence"]
+        paper_source = paper_ctx["paper_source"]
+
         dynamic_risk = calculate_dynamic_leverage(
             move_percent,
             risk_level,
-            signal=signal,
-            trade_allowed=trade_allowed,
+            signal=paper_signal,
+            trade_allowed=paper_trade_allowed,
         )
         if dynamic_risk["reason"] == "no trade / wait signal" and not structure_data["liquidity_event"]:
             reason = dynamic_risk["reason"]
@@ -242,27 +271,85 @@ while True:
         print(
             f"RISK_LEVEL: {risk_level} | REASON: {reason} | RECOMMENDED_LEVERAGE: {dynamic_risk['recommended_leverage']} | TARGET_PROFIT_PERCENT: {dynamic_risk['target_profit_percent']}"
         )
+        print(f"SETUP_TYPE: {setup_type}")
+        print(f"SETUP_DIRECTION: {setup_direction}")
+        print(f"SETUP_QUALITY: {setup_quality}")
+        print(f"SETUP_REASONS: {setup_reasons}")
+        print(
+            f"PAPER_SOURCE: {paper_source} | PAPER_SIGNAL: {paper_signal} | "
+            f"PAPER_TRADE_ALLOWED: {'YES' if paper_trade_allowed else 'NO'} | "
+            f"PAPER_ENTRY_QUALITY: {paper_entry_quality} | PAPER_CONFIDENCE: {paper_confidence}/5"
+        )
+
+        paper_reason = reason
+        if paper_source != "signal":
+            paper_reason = f"{reason} | {paper_source}"
 
         paper_logs = process_paper_trading(
             log_dir,
             current_price=price,
-            signal=signal,
-            trade_allowed=trade_allowed,
-            signal_confidence=signal_confidence,
-            entry_quality=entry_quality,
+            signal=paper_signal,
+            trade_allowed=paper_trade_allowed,
+            signal_confidence=paper_confidence,
+            entry_quality=paper_entry_quality,
             tf_alignment=tf_alignment,
             leverage=dynamic_risk["recommended_leverage"],
             target_profit_percent=dynamic_risk["target_profit_percent"],
-            reason=reason,
+            reason=paper_reason,
             timestamp=timestamp,
         )
         for line in paper_logs:
             print(line)
 
+        # Observer only — after SIGNAL / paper decisions; not used in scoring or setup_engine.
+        structure_events = analyze_structure_events(candles)
+        print(f"STRUCTURE_EVENT_BOS: {structure_events['bos']}")
+        print(f"STRUCTURE_EVENT_CHOCH: {structure_events['choch']}")
+        print(f"CONTROL_SHIFT: {structure_events['control_shift']}")
+        print(f"BUYERS_TAKE_CONTROL: {structure_events['buyers_take_control']}")
+        print(f"SELLERS_TAKE_CONTROL: {structure_events['sellers_take_control']}")
+        print(f"STRUCTURE_EVENT_STRENGTH: {structure_events['event_strength']}")
+        print(f"STRUCTURE_EVENT_REASONS: {structure_events['event_reasons']}")
+
+        save_setup_snapshot(
+            log_dir,
+            timestamp=timestamp,
+            symbol=SYMBOL,
+            price=price,
+            signal=signal,
+            paper_signal=paper_signal,
+            paper_trade_allowed=paper_trade_allowed,
+            setup_type=setup_type,
+            setup_direction=setup_direction,
+            setup_quality=setup_quality,
+            signal_confidence=signal_confidence,
+            entry_quality=entry_quality,
+            tf_alignment=tf_alignment,
+            alignment_strength=alignment_strength,
+            market_structure=structure_data["structure"],
+            structure_strength=structure_data["structure_strength"],
+            momentum=structure_data["momentum"],
+            risk_level=risk_level,
+            recommended_leverage=dynamic_risk["recommended_leverage"],
+            target_profit_percent=dynamic_risk["target_profit_percent"],
+            fvg_type=fvg_data["fvg_type"],
+            fvg_touched=fvg_data["fvg_touched"],
+            rejection_after_touch=fvg_data["rejection_after_touch"],
+            candle_strength=price_action_data["candle_strength"],
+            wick_rejection=price_action_data["wick_rejection"],
+            fake_breakout=price_action_data["fake_breakout"],
+            support_reaction=price_action_data["support_reaction"],
+            resistance_reaction=price_action_data["resistance_reaction"],
+            momentum_shift=price_action_data["momentum_shift"],
+            setup_reasons=setup_reasons,
+            confidence_reasons=confidence_reasons,
+            structure_events=structure_events,
+        )
+
         if ENABLE_LOGS:
             with open(log_file, "a", encoding="utf-8") as f:
                 f.write(
-                    f"{timestamp} | [ITERATION {counter}] SYMBOL: {SYMBOL} | BTC PRICE: {price} | SIGNAL: {signal} | SIGNAL_CONFIDENCE: {signal_confidence}/5 | ENTRY_QUALITY: {entry_quality} | CONFIDENCE_REASONS: {confidence_reasons} | TREND: {trend} | TREND_TF_SIGNAL: {trend_tf_signal} | CONFIRM_TF_SIGNAL: {confirm_tf_signal} | ENTRY_TF_SIGNAL: {entry_tf_signal} | TF_ALIGNMENT: {tf_alignment} | ALIGNMENT_STRENGTH: {alignment_strength} | MARKET_STRUCTURE: {structure_data['structure']} | STRUCTURE_STRENGTH: {structure_data['structure_strength']} | TREND_CONTINUATION_CHANCE: {structure_data['trend_continuation_chance']} | REVERSAL_CHANCE: {structure_data['reversal_chance']} | LIQUIDITY_EVENT: {structure_data['liquidity_event']} | MOMENTUM: {structure_data['momentum']} | CANDLE_STRENGTH: {price_action_data['candle_strength']} | WICK_REJECTION: {price_action_data['wick_rejection']} | FAKE_BREAKOUT: {price_action_data['fake_breakout']} | SUPPORT_REACTION: {price_action_data['support_reaction']} | RESISTANCE_REACTION: {price_action_data['resistance_reaction']} | MOMENTUM_SHIFT: {price_action_data['momentum_shift']} | FVG_TYPE: {fvg_data['fvg_type']} | GAP_SIZE_PERCENT: {fvg_data['gap_size_percent']} | FVG_TOUCHED: {fvg_data['fvg_touched']} | REJECTION_AFTER_TOUCH: {fvg_data['rejection_after_touch']} | RISK_LEVEL: {risk_level} | REASON: {reason} | LEVERAGE: {dynamic_risk['recommended_leverage']} | TARGET_PROFIT_PERCENT: {dynamic_risk['target_profit_percent']} | DATA_FLOW: MTF | INDICATORS: {indicator_status}\n"
+                    f"{timestamp} | [ITERATION {counter}] SYMBOL: {SYMBOL} | BTC PRICE: {price} | SIGNAL: {signal} | SIGNAL_CONFIDENCE: {signal_confidence}/5 | ENTRY_QUALITY: {entry_quality} | CONFIDENCE_REASONS: {confidence_reasons} | SETUP_TYPE: {setup_type} | SETUP_DIRECTION: {setup_direction} | SETUP_QUALITY: {setup_quality} | SETUP_REASONS: {setup_reasons} | PAPER_SOURCE: {paper_source} | PAPER_SIGNAL: {paper_signal} | PAPER_TRADE_ALLOWED: {'YES' if paper_trade_allowed else 'NO'} | TREND: {trend} | TREND_TF_SIGNAL: {trend_tf_signal} | CONFIRM_TF_SIGNAL: {confirm_tf_signal} | ENTRY_TF_SIGNAL: {entry_tf_signal} | TF_ALIGNMENT: {tf_alignment} | ALIGNMENT_STRENGTH: {alignment_strength} | MARKET_STRUCTURE: {structure_data['structure']} | STRUCTURE_STRENGTH: {structure_data['structure_strength']} | TREND_CONTINUATION_CHANCE: {structure_data['trend_continuation_chance']} | REVERSAL_CHANCE: {structure_data['reversal_chance']} | LIQUIDITY_EVENT: {structure_data['liquidity_event']} | MOMENTUM: {structure_data['momentum']} | CANDLE_STRENGTH: {price_action_data['candle_strength']} | WICK_REJECTION: {price_action_data['wick_rejection']} | FAKE_BREAKOUT: {price_action_data['fake_breakout']} | SUPPORT_REACTION: {price_action_data['support_reaction']} | RESISTANCE_REACTION: {price_action_data['resistance_reaction']} | MOMENTUM_SHIFT: {price_action_data['momentum_shift']} | FVG_TYPE: {fvg_data['fvg_type']} | GAP_SIZE_PERCENT: {fvg_data['gap_size_percent']} | FVG_TOUCHED: {fvg_data['fvg_touched']} | REJECTION_AFTER_TOUCH: {fvg_data['rejection_after_touch']} | RISK_LEVEL: {risk_level} | REASON: {reason} | LEVERAGE: {dynamic_risk['recommended_leverage']} | TARGET_PROFIT_PERCENT: {dynamic_risk['target_profit_percent']} | DATA_FLOW: MTF | INDICATORS: {indicator_status}\n"
                 )
             with open(signals_history_file, "a", encoding="utf-8") as f:
                 f.write(f"{timestamp} | ITERATION {counter} | {signal}\n")
