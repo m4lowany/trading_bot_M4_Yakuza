@@ -4,6 +4,8 @@ Modularny bot analityczny dla rynku krypto: **MEXC** + **ccxt**, para **BTC/USDT
 
 Strategia referencyjna: [`notes/yakuza_strategy_core.md`](notes/yakuza_strategy_core.md).
 
+**Foundation (dev / AI):** [`ARCHITECTURE.md`](ARCHITECTURE.md) · [`PROMPT_LIBRARY.md`](PROMPT_LIBRARY.md) · [`.cursor/rules/project_rules.md`](.cursor/rules/project_rules.md)
+
 ## Checkpoint architektury (stan projektu)
 
 Modularny pipeline decyzyjny — **bez real execution** na giełdzie.
