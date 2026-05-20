@@ -4,6 +4,33 @@ Modularny bot analityczny dla rynku krypto: **MEXC** + **ccxt**, para **BTC/USDT
 
 Strategia referencyjna: [`notes/yakuza_strategy_core.md`](notes/yakuza_strategy_core.md).
 
+## Checkpoint architektury (stan projektu)
+
+Modularny pipeline decyzyjny — **bez real execution** na giełdzie.
+
+```
+MEXC OHLCV
+    → MTF 30m (trend) / 15m (confirm) / 5m (entry)
+    → indicators + market_structure + price_action
+    → scoring + signals + MTF alignment (legacy SIGNAL)
+    → setup_engine (bias + trigger, setup_quality)
+    → risk_manager (advisory)
+    → paper_trader (symulacja TP/SL)
+    → setup_stats → logs/setup_history.jsonl
+    → structure_events (observer: log + snapshot only)
+```
+
+| Warstwa | Moduł | Rola |
+|---------|--------|------|
+| **MTF** | `timeframe_analysis.py` | 30m / 15m / 5m; alignment FULL_BULL/BEAR/MIXED |
+| **Setup** | `setup_engine.py` | `TREND_CONTINUATION`, `PULLBACK_ENTRY`, `REVERSAL_ATTEMPT`; paper override przy WAIT |
+| **Paper** | `paper_trader.py` | Symulacja; cooldown 3 iter.; MIXED → close po 3 iter. |
+| **Stats** | `setup_stats.py`, `stats_report.py` | Snapshoty + raport edge (w tym structure events) |
+| **Observer** | `structure_events.py` | BOS / CHoCH / control shift — **nie wpływa na SIGNAL** |
+| **Soft filter** | `setup_engine.py` | `sideways continuation penalty` — entry SIDEWAYS+WEAK obniża quality continuation |
+
+**Nie zaimplementowane:** realne zlecenia MEXC, FIBO/BAG (stuby), MTF docelowe 1D/1H.
+
 ## Architektura
 
 | Plik | Rola |
@@ -51,6 +78,7 @@ Przepływ: MEXC → MTF (30m / 15m / 5m) → scoring + alignment → `setup_engi
 
 - `TREND_CONTINUATION`, `PULLBACK_ENTRY`, `REVERSAL_ATTEMPT`, `NO_SETUP`
 - Może zasugerować `paper_signal` przy `SIGNAL == WAIT` (quality MEDIUM/HIGH)
+- **Sideways continuation penalty** (soft): entry `SIDEWAYS` + `WEAK` + `TREND_CONTINUATION` → obniżona `setup_quality`, reason `sideways continuation penalty`, bez hard block
 
 ## Wskaźniki
 
@@ -93,7 +121,7 @@ python3 stats_report.py
 ```
 
 - Czyta `logs/setup_history.jsonl` + `logs/paper_trades.json`
-- Win rate, breakdown po setup_type / quality / alignment
+- Win rate, breakdown po setup_type / quality / alignment / structure events (BOS, CHoCH, control shift, krzyżówki)
 
 ## Risk manager
 
@@ -133,7 +161,8 @@ python3 main.py
 - [x] Paper trading (symulacja)
 - [x] setup_engine (bias + trigger)
 - [x] setup_stats / stats_report
-- [x] structure_events.py (BOS / CHoCH — logowanie)
+- [x] structure_events.py (observer — log + snapshot)
+- [x] sideways continuation soft penalty
 - [ ] Integracja structure_events → scoring / setup_engine
 - [ ] **FIBO** jako confluence (nie główny trigger)
 - [ ] **BAG** jako confluence
