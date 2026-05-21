@@ -179,10 +179,119 @@ def get_bag(data):
     return "WAIT"
 
 
+def _default_fibo_response():
+    return {
+        "fibo_signal": "WAIT",
+        "fibo_direction": "NEUTRAL",
+        "fibo_zone": "NONE",
+        "retracement": 0.0,
+        "swing_low": None,
+        "swing_high": None,
+        "level_0_382": None,
+        "level_0_5": None,
+        "level_0_618": None,
+        "level_0_786": None,
+        "level_1_272": None,
+    }
+
+
 def get_fibo(data):
-    return "WAIT"
+    """
+    Prosty fibo context:
+    - wyznacza swing low/high na ostatnim oknie danych,
+    - ocenia, czy cena jest w strefie 0.5-0.786,
+    - zwraca BUY/SELL tylko gdy retracement i świeca wejściowa są zgodne.
+    """
+    default_response = _default_fibo_response()
+    if not validate_candles(data, min_length=20):
+        return default_response
 
+    candles = data
+    lookback = min(len(candles), 80)
+    recent = candles[-lookback:]
 
+    highs = [candle[2] for candle in recent]
+    lows = [candle[3] for candle in recent]
+    opens = [candle[1] for candle in recent]
+    closes = [candle[4] for candle in recent]
+
+    swing_high = max(highs)
+    swing_low = min(lows)
+    swing_range = swing_high - swing_low
+    if swing_range <= 0:
+        return default_response
+
+    current_price = closes[-1]
+    mid_price = swing_low + (swing_range * 0.5)
+    lookback_anchor = closes[0]
+    recent_trend = current_price - lookback_anchor
+    last_bullish = closes[-1] > opens[-1]
+    last_bearish = closes[-1] < opens[-1]
+
+    level_0_382 = swing_low + (swing_range * 0.382)
+    level_0_5 = swing_low + (swing_range * 0.5)
+    level_0_618 = swing_low + (swing_range * 0.618)
+    level_0_786 = swing_low + (swing_range * 0.786)
+    level_1_272 = swing_low + (swing_range * 1.272)
+
+    fibo_direction = "NEUTRAL"
+    fibo_zone = "NONE"
+    retracement = 0.0
+    fibo_signal = "WAIT"
+
+    bullish_bias = recent_trend >= 0 and current_price >= mid_price
+    bearish_bias = recent_trend < 0 and current_price <= mid_price
+    if not bullish_bias and not bearish_bias:
+        bullish_bias = current_price > mid_price
+        bearish_bias = current_price < mid_price
+
+    if bullish_bias:
+        fibo_direction = "BULLISH"
+        retracement = (swing_high - current_price) / swing_range
+        if retracement < 0.382:
+            fibo_zone = "EXTENDED"
+        elif retracement < 0.5:
+            fibo_zone = "WATCH_ZONE"
+        elif retracement <= 0.786:
+            fibo_zone = "ENTRY_ZONE"
+        else:
+            fibo_zone = "DEEP_PULLBACK"
+
+        if fibo_zone == "ENTRY_ZONE" and last_bullish:
+            fibo_signal = "BUY"
+        elif fibo_zone == "WATCH_ZONE" and last_bullish:
+            fibo_signal = "BUY"
+
+    elif bearish_bias:
+        fibo_direction = "BEARISH"
+        retracement = (current_price - swing_low) / swing_range
+        if retracement < 0.382:
+            fibo_zone = "EXTENDED"
+        elif retracement < 0.5:
+            fibo_zone = "WATCH_ZONE"
+        elif retracement <= 0.786:
+            fibo_zone = "ENTRY_ZONE"
+        else:
+            fibo_zone = "DEEP_PULLBACK"
+
+        if fibo_zone == "ENTRY_ZONE" and last_bearish:
+            fibo_signal = "SELL"
+        elif fibo_zone == "WATCH_ZONE" and last_bearish:
+            fibo_signal = "SELL"
+
+    return {
+        "fibo_signal": fibo_signal,
+        "fibo_direction": fibo_direction,
+        "fibo_zone": fibo_zone,
+        "retracement": round(retracement, 4),
+        "swing_low": round(swing_low, 8),
+        "swing_high": round(swing_high, 8),
+        "level_0_382": round(level_0_382, 8),
+        "level_0_5": round(level_0_5, 8),
+        "level_0_618": round(level_0_618, 8),
+        "level_0_786": round(level_0_786, 8),
+        "level_1_272": round(level_1_272, 8),
+    }
 def get_all_indicators(data):
     return {
         "MA60": get_ma60(data),

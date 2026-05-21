@@ -40,6 +40,103 @@ def _tf_bias(tf_data):
     return "NEUTRAL"
 
 
+def _macro_bias(tf_data):
+    """
+    Bias oparty na strukturze i wskaźnikach kierunkowych.
+
+    To jest bliższe logice z Twojego bota testowego: najpierw kontekst wyższego TF,
+    potem dopiero wejście z niższego TF.
+    """
+    structure_data = tf_data.get("structure_data", {})
+    indicator_status = tf_data.get("indicator_status", {})
+    structure_bias = _structure_bias(structure_data)
+
+    bullish_votes = 0
+    bearish_votes = 0
+    for key in ("MA60", "EMA238", "RSI"):
+        value = indicator_status.get(key, "WAIT")
+        if value in ("BUY", "BULLISH"):
+            bullish_votes += 1
+        elif value in ("SELL", "BEARISH"):
+            bearish_votes += 1
+
+    if structure_bias == "BULLISH" and bullish_votes >= 2:
+        return "BULLISH"
+    if structure_bias == "BEARISH" and bearish_votes >= 2:
+        return "BEARISH"
+    if bullish_votes >= 2 and bullish_votes > bearish_votes:
+        return "BULLISH"
+    if bearish_votes >= 2 and bearish_votes > bullish_votes:
+        return "BEARISH"
+    if structure_bias != "NEUTRAL":
+        return structure_bias
+    return _tf_bias(tf_data)
+
+
+def _rsi_allows_direction(tf_data, direction):
+    rsi_signal = tf_data.get("indicator_status", {}).get("RSI", "WAIT")
+    if direction == "BUY":
+        return rsi_signal in ("BUY", "WAIT")
+    if direction == "SELL":
+        return rsi_signal in ("SELL", "WAIT")
+    return True
+
+
+def _msb_context_ok(structure_data):
+    """
+    Prosty proxy na MSB: struktura nie może być SIDEWAYS, a kontekst musi mieć
+    przynajmniej średnią siłę albo momentum.
+    """
+    structure = structure_data.get("structure", "SIDEWAYS")
+    strength = structure_data.get("structure_strength", "WEAK")
+    momentum = structure_data.get("momentum", "WEAK")
+    if structure == "SIDEWAYS":
+        return False
+    return strength in ("MEDIUM", "STRONG") or momentum == "STRONG"
+
+
+def _fibo_context(tf_data):
+    fibo = tf_data.get("indicator_status", {}).get("FIBO", {})
+    if not isinstance(fibo, dict):
+        return {}
+    return fibo
+
+
+def _fibo_supports_direction(tf_data, direction):
+    fibo = _fibo_context(tf_data)
+    if not fibo:
+        return True
+
+    fibo_signal = fibo.get("fibo_signal", "WAIT")
+    fibo_direction = fibo.get("fibo_direction", "NEUTRAL")
+    fibo_zone = fibo.get("fibo_zone", "NONE")
+
+    if fibo_direction == "NEUTRAL" or fibo_zone == "NONE":
+        return True
+
+    if fibo_signal == direction:
+        return True
+
+    if direction == "BUY" and fibo_direction == "BULLISH":
+        return fibo_zone in ("ENTRY_ZONE", "WATCH_ZONE")
+    if direction == "SELL" and fibo_direction == "BEARISH":
+        return fibo_zone in ("ENTRY_ZONE", "WATCH_ZONE")
+
+    return False
+
+
+def _fibo_context_label(tf_data):
+    fibo = _fibo_context(tf_data)
+    if not fibo:
+        return "FIBO=NA"
+    return (
+        f"FIBO={fibo.get('fibo_signal', 'WAIT')}"
+        f"|dir={fibo.get('fibo_direction', 'NEUTRAL')}"
+        f"|zone={fibo.get('fibo_zone', 'NONE')}"
+        f"|retr={fibo.get('retracement', 0.0)}"
+    )
+
+
 def _is_bullish_tf(tf_data):
     structure_data = tf_data.get("structure_data", {})
     return (
@@ -221,15 +318,25 @@ def detect_setup(
             "setup_reasons": ["liquidity event -> NO_SETUP"],
         }
 
-    trend_bias = _tf_bias(trend_tf_data)
-    confirm_bias = _tf_bias(confirm_tf_data)
+    trend_bias = _macro_bias(trend_tf_data)
+    confirm_bias = _macro_bias(confirm_tf_data)
     trend_signal = trend_tf_data.get("signal", "WAIT")
     confirm_signal = confirm_tf_data.get("signal", "WAIT")
     entry_signal = entry_tf_data.get("signal", "WAIT")
+    entry_rsi_signal = entry_tf_data.get("indicator_status", {}).get("RSI", "WAIT")
+    entry_fibo_label = _fibo_context_label(entry_tf_data)
+    trend_msb_ok = _msb_context_ok(trend_s)
+    confirm_msb_ok = _msb_context_ok(confirm_s)
+    entry_msb_ok = _msb_context_ok(entry_s)
 
     alignment = _signal_alignment(trend_signal, confirm_signal, entry_signal)
     reasons.append(f"signal alignment={alignment}")
     reasons.append(f"trend bias={trend_bias} | confirm bias={confirm_bias}")
+    reasons.append(f"entry RSI={entry_rsi_signal}")
+    reasons.append(f"entry {entry_fibo_label}")
+    reasons.append(
+        f"MSB_CONTEXT trend={trend_msb_ok} confirm={confirm_msb_ok} entry={entry_msb_ok}"
+    )
 
     bull_triggers = _bullish_entry_triggers(price_action_data, fvg_data)
     bear_triggers = _bearish_entry_triggers(price_action_data, fvg_data)
@@ -250,11 +357,15 @@ def detect_setup(
             + ["entry structure WEAK and no entry trigger -> NO_SETUP"],
         }
 
-    # TREND_CONTINUATION: 30m + 15m aligned with trend, entry confirms or triggers
-    if _is_bullish_tf(trend_tf_data) and _is_bullish_tf(confirm_tf_data):
-        if entry_signal == "BUY" or (entry_signal == "WAIT" and has_bull_trigger):
+    # TREND_CONTINUATION: bias + confirmation, entry confirms or triggers.
+    if trend_bias == "BULLISH" and confirm_bias != "BEARISH" and trend_msb_ok and confirm_msb_ok:
+        if (
+            (entry_signal == "BUY" or (entry_signal == "WAIT" and has_bull_trigger))
+            and _rsi_allows_direction(entry_tf_data, "BUY")
+            and _fibo_supports_direction(entry_tf_data, "BUY")
+        ):
             setup_reasons = list(reasons)
-            setup_reasons.append("30m+15m bullish; entry BUY or bullish trigger")
+            setup_reasons.append("bullish bias + MSB context; entry BUY or bullish trigger")
             setup_reasons.extend(bull_triggers)
             quality = _grade_setup_quality(
                 trend_strength=trend_s.get("structure_strength", "WEAK"),
@@ -275,10 +386,14 @@ def detect_setup(
                 entry_s,
             )
 
-    if _is_bearish_tf(trend_tf_data) and _is_bearish_tf(confirm_tf_data):
-        if entry_signal == "SELL" or (entry_signal == "WAIT" and has_bear_trigger):
+    if trend_bias == "BEARISH" and confirm_bias != "BULLISH" and trend_msb_ok and confirm_msb_ok:
+        if (
+            (entry_signal == "SELL" or (entry_signal == "WAIT" and has_bear_trigger))
+            and _rsi_allows_direction(entry_tf_data, "SELL")
+            and _fibo_supports_direction(entry_tf_data, "SELL")
+        ):
             setup_reasons = list(reasons)
-            setup_reasons.append("30m+15m bearish; entry SELL or bearish trigger")
+            setup_reasons.append("bearish bias + MSB context; entry SELL or bearish trigger")
             setup_reasons.extend(bear_triggers)
             quality = _grade_setup_quality(
                 trend_strength=trend_s.get("structure_strength", "WEAK"),
@@ -312,10 +427,16 @@ def detect_setup(
             }
 
         if trend_bias == "BULLISH" and has_bull_trigger:
-            if entry_signal in ("WAIT", "BUY") and not has_bear_trigger:
+            if (
+                entry_signal in ("WAIT", "BUY")
+                and not has_bear_trigger
+                and _rsi_allows_direction(entry_tf_data, "BUY")
+                and _fibo_supports_direction(entry_tf_data, "BUY")
+                and trend_msb_ok
+            ):
                 setup_reasons = list(reasons)
                 setup_reasons.append(
-                    "MIXED pullback: 30m bullish, 15m not opposing, 5m bullish trigger"
+                    "MIXED pullback: bullish bias, MSB context, confirm not opposing, bullish trigger"
                 )
                 setup_reasons.extend(bull_triggers)
                 quality = _grade_setup_quality(
@@ -335,10 +456,16 @@ def detect_setup(
                 }
 
         if trend_bias == "BEARISH" and has_bear_trigger:
-            if entry_signal in ("WAIT", "SELL") and not has_bull_trigger:
+            if (
+                entry_signal in ("WAIT", "SELL")
+                and not has_bull_trigger
+                and _rsi_allows_direction(entry_tf_data, "SELL")
+                and _fibo_supports_direction(entry_tf_data, "SELL")
+                and trend_msb_ok
+            ):
                 setup_reasons = list(reasons)
                 setup_reasons.append(
-                    "MIXED pullback: 30m bearish, 15m not opposing, 5m bearish trigger"
+                    "MIXED pullback: bearish bias, MSB context, confirm not opposing, bearish trigger"
                 )
                 setup_reasons.extend(bear_triggers)
                 quality = _grade_setup_quality(
@@ -365,6 +492,8 @@ def detect_setup(
             trend_bias == "BEARISH"
             and has_bull_trigger
             and not _is_bullish_tf(confirm_tf_data)
+            and _rsi_allows_direction(entry_tf_data, "BUY")
+            and _fibo_supports_direction(entry_tf_data, "BUY")
         ):
             setup_reasons = list(reasons)
             setup_reasons.append(
@@ -393,6 +522,8 @@ def detect_setup(
             trend_bias == "BULLISH"
             and has_bear_trigger
             and not _is_bearish_tf(confirm_tf_data)
+            and _rsi_allows_direction(entry_tf_data, "SELL")
+            and _fibo_supports_direction(entry_tf_data, "SELL")
         ):
             setup_reasons = list(reasons)
             setup_reasons.append(
@@ -418,7 +549,13 @@ def detect_setup(
             }
 
     # Full signal alignment with entry trigger only (edge: entry WAIT but triggers)
-    if alignment == "FULL_BULLISH" and entry_signal == "WAIT" and has_bull_trigger:
+    if (
+        alignment == "FULL_BULLISH"
+        and entry_signal == "WAIT"
+        and has_bull_trigger
+        and _rsi_allows_direction(entry_tf_data, "BUY")
+        and _fibo_supports_direction(entry_tf_data, "BUY")
+    ):
         setup_reasons = list(reasons) + ["FULL_BULLISH signals; entry WAIT + bullish trigger"]
         setup_reasons.extend(bull_triggers)
         quality = _grade_setup_quality(
@@ -440,7 +577,13 @@ def detect_setup(
             entry_s,
         )
 
-    if alignment == "FULL_BEARISH" and entry_signal == "WAIT" and has_bear_trigger:
+    if (
+        alignment == "FULL_BEARISH"
+        and entry_signal == "WAIT"
+        and has_bear_trigger
+        and _rsi_allows_direction(entry_tf_data, "SELL")
+        and _fibo_supports_direction(entry_tf_data, "SELL")
+    ):
         setup_reasons = list(reasons) + ["FULL_BEARISH signals; entry WAIT + bearish trigger"]
         setup_reasons.extend(bear_triggers)
         quality = _grade_setup_quality(

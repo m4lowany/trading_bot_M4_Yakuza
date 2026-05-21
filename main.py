@@ -129,6 +129,15 @@ while True:
                 "rejection_after_touch": False,
             },
         )
+        fibo_data = indicator_status.get(
+            "FIBO",
+            {
+                "fibo_signal": "WAIT",
+                "fibo_direction": "NEUTRAL",
+                "fibo_zone": "NONE",
+                "retracement": 0.0,
+            },
+        )
         score = calculate_score(indicator_status)
         if fvg_data["fvg_type"] == "BULLISH" and fvg_data["rejection_after_touch"]:
             score += 1
@@ -153,6 +162,7 @@ while True:
             structure_data,
             price_action_data,
             fvg_data,
+            fibo_data,
         )
         confidence_data = apply_alignment_to_confidence(
             confidence_data,

@@ -1,9 +1,18 @@
+def _extract_indicator_signal(value):
+    if isinstance(value, dict):
+        for key in ("signal", "fvg_signal", "fibo_signal", "setup_signal"):
+            signal = value.get(key)
+            if signal:
+                return signal
+        return "WAIT"
+    return value
+
+
 def calculate_score(indicators):
     score = 0
 
     for name, value in indicators.items():
-        if isinstance(value, dict):
-            value = value.get("fvg_signal", "WAIT")
+        value = _extract_indicator_signal(value)
         if value in ("BUY", "BULLISH"):
             score += 1
 
@@ -13,7 +22,14 @@ def calculate_score(indicators):
     return score
 
 
-def calculate_confidence(score, signal, structure_data, price_action_data, fvg_data):
+def calculate_confidence(
+    score,
+    signal,
+    structure_data,
+    price_action_data,
+    fvg_data,
+    fibo_data=None,
+):
     """
     Yakuza-style ocena jakości setupu.
 
@@ -54,6 +70,12 @@ def calculate_confidence(score, signal, structure_data, price_action_data, fvg_d
     fvg_touched = bool(fvg_data.get("fvg_touched", False))
     rejection_after_touch = bool(fvg_data.get("rejection_after_touch", False))
 
+    fibo_data = fibo_data or {}
+    fibo_signal = fibo_data.get("fibo_signal", "WAIT")
+    fibo_direction = fibo_data.get("fibo_direction", "NEUTRAL")
+    fibo_zone = fibo_data.get("fibo_zone", "NONE")
+    fibo_retracement = float(fibo_data.get("retracement", 0.0) or 0.0)
+
     if signal == "BUY":
         if structure == "BULLISH" and structure_strength == "STRONG":
             confidence += 1
@@ -73,6 +95,12 @@ def calculate_confidence(score, signal, structure_data, price_action_data, fvg_d
         if fvg_type == "BEARISH" and fvg_touched:
             confidence -= 2
             reasons.append("- BEARISH FVG already touched (against BUY)")
+        if fibo_direction == "BULLISH" and fibo_zone in ("ENTRY_ZONE", "WATCH_ZONE"):
+            confidence += 1
+            reasons.append("+ fibo bullish zone supports BUY")
+        if fibo_direction == "BEARISH" and fibo_zone == "ENTRY_ZONE":
+            confidence -= 1
+            reasons.append("- fibo bearish entry zone against BUY")
 
     elif signal == "SELL":
         if structure == "BEARISH" and structure_strength == "STRONG":
@@ -93,6 +121,12 @@ def calculate_confidence(score, signal, structure_data, price_action_data, fvg_d
         if fvg_type == "BULLISH" and fvg_touched:
             confidence -= 2
             reasons.append("- BULLISH FVG already touched (against SELL)")
+        if fibo_direction == "BEARISH" and fibo_zone in ("ENTRY_ZONE", "WATCH_ZONE"):
+            confidence += 1
+            reasons.append("+ fibo bearish zone supports SELL")
+        if fibo_direction == "BULLISH" and fibo_zone == "ENTRY_ZONE":
+            confidence -= 1
+            reasons.append("- fibo bullish entry zone against SELL")
 
     if structure == "SIDEWAYS":
         confidence -= 1
@@ -113,6 +147,16 @@ def calculate_confidence(score, signal, structure_data, price_action_data, fvg_d
         reasons.append("signal=WAIT -> confidence 0")
 
     confidence = max(0, min(5, confidence))
+
+    if fibo_signal in ("BUY", "SELL") and signal != "WAIT":
+        if fibo_signal == signal:
+            confidence += 1
+            reasons.append("+ fibo signal aligned with trade direction")
+        else:
+            confidence -= 1
+            reasons.append("- fibo signal opposite to trade direction")
+    elif fibo_retracement >= 0.786 and fibo_direction in ("BULLISH", "BEARISH"):
+        reasons.append("fibo deep pullback zone -> wait for better reaction")
 
     if liquidity_event or signal == "WAIT":
         entry_quality = "LOW"
