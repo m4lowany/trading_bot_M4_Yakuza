@@ -357,8 +357,8 @@ def detect_setup(
             + ["entry structure WEAK and no entry trigger -> NO_SETUP"],
         }
 
-    # TREND_CONTINUATION: bias + confirmation, entry confirms or triggers.
-    if trend_bias == "BULLISH" and confirm_bias != "BEARISH" and trend_msb_ok and confirm_msb_ok:
+    # TREND_CONTINUATION: FULL MTF signal alignment only; MIXED -> PULLBACK below.
+    if trend_bias == "BULLISH" and confirm_bias != "BEARISH" and trend_msb_ok and confirm_msb_ok and alignment in ("FULL_BULLISH", "FULL_BEARISH"):
         if (
             (entry_signal == "BUY" or (entry_signal == "WAIT" and has_bull_trigger))
             and _rsi_allows_direction(entry_tf_data, "BUY")
@@ -386,7 +386,7 @@ def detect_setup(
                 entry_s,
             )
 
-    if trend_bias == "BEARISH" and confirm_bias != "BULLISH" and trend_msb_ok and confirm_msb_ok:
+    if trend_bias == "BEARISH" and confirm_bias != "BULLISH" and trend_msb_ok and confirm_msb_ok and alignment in ("FULL_BULLISH", "FULL_BEARISH"):
         if (
             (entry_signal == "SELL" or (entry_signal == "WAIT" and has_bear_trigger))
             and _rsi_allows_direction(entry_tf_data, "SELL")
@@ -455,24 +455,40 @@ def detect_setup(
                     "setup_reasons": setup_reasons,
                 }
 
-        if trend_bias == "BEARISH" and has_bear_trigger:
+        bullish_fvg_pb_short = (
+            fvg_data.get("fvg_type") == "BULLISH"
+            and fvg_data.get("rejection_after_touch")
+        )
+        bearish_pb_short_trigger = has_bear_trigger or (
+            confirm_bias == "BEARISH" and bullish_fvg_pb_short
+        )
+        bull_trigger_blocks_pb_short = has_bull_trigger and not (
+            confirm_bias == "BEARISH" and bullish_fvg_pb_short
+        )
+
+        if trend_bias == "BEARISH" and bearish_pb_short_trigger:
             if (
                 entry_signal in ("WAIT", "SELL")
-                and not has_bull_trigger
+                and not bull_trigger_blocks_pb_short
                 and _rsi_allows_direction(entry_tf_data, "SELL")
                 and _fibo_supports_direction(entry_tf_data, "SELL")
                 and trend_msb_ok
             ):
                 setup_reasons = list(reasons)
                 setup_reasons.append(
-                    "MIXED pullback: bearish bias, MSB context, confirm not opposing, bearish trigger"
+                    "MIXED pullback: bearish bias, MSB context, confirm not opposing, bearish or bullish-FVG pullback trigger"
                 )
-                setup_reasons.extend(bear_triggers)
+                pb_short_triggers = list(bear_triggers)
+                if bullish_fvg_pb_short and confirm_bias == "BEARISH":
+                    pb_short_triggers.append(
+                        "bullish FVG rejection_after_touch (pullback short)"
+                    )
+                setup_reasons.extend(pb_short_triggers)
                 quality = _grade_setup_quality(
                     trend_strength=trend_s.get("structure_strength", "WEAK"),
                     confirm_strength=confirm_s.get("structure_strength", "WEAK"),
                     entry_strength=entry_s.get("structure_strength", "WEAK"),
-                    trigger_count=len(bear_triggers),
+                    trigger_count=len(pb_short_triggers),
                     setup_type="PULLBACK_ENTRY",
                     fake_breakout=fake_breakout,
                     alignment=alignment,
@@ -626,6 +642,9 @@ def resolve_paper_from_setup(
     """
     When legacy signal is WAIT, allow paper layer to use setup_engine suggestion.
     Does not change the displayed SIGNAL (MTF filter preserved).
+
+    TREND_CONTINUATION respects trade_allowed (e.g. MIXED alignment blocks paper open).
+    Other setup types keep prior override behavior when setup quality passes.
     """
     paper_signal = signal
     paper_trade_allowed = trade_allowed
@@ -661,7 +680,10 @@ def resolve_paper_from_setup(
             paper_confidence = max(signal_confidence, 3) - confidence_penalty
         paper_confidence = max(0, min(5, paper_confidence))
         if not liquidity_event:
-            paper_trade_allowed = True
+            if setup_type == "TREND_CONTINUATION":
+                paper_trade_allowed = bool(trade_allowed)
+            else:
+                paper_trade_allowed = True
 
     return {
         "paper_signal": paper_signal,
