@@ -128,6 +128,7 @@ def test_analyze_and_snapshot_roundtrip():
         "last_lh",
         "structure_phase",
         "choch_is_first_in_leg",
+        "leg_index",
     ):
         assert key in events, f"missing key in analyze output: {key}"
 

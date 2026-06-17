@@ -34,6 +34,7 @@ def _default_events():
         "last_hl": None,
         "last_lh": None,
         "structure_phase": "CONTINUATION",
+        "leg_index": 0,
     }
 
 
@@ -211,20 +212,26 @@ class _StructureStateMachine:
         self.choch_fired_in_leg = False
         self.last_choch = "NONE"
         self.structure_phase = "CONTINUATION"
+        self.leg_index = 0
 
     def reset_leg(self, new_character):
         self.character = new_character
         self.choch_fired_in_leg = False
-        self.structure_phase = "CONTINUATION"
+        self.structure_phase = "TRANSITION"
 
     def apply_choch(self, choch):
+        prev_character = self.character
         self.last_choch = choch
-        self.choch_fired_in_leg = True
-        self.structure_phase = "TRANSITION"
         if choch == "CHOCH_BULLISH":
-            self.character = "BULLISH"
+            new_character = "BULLISH"
         elif choch == "CHOCH_BEARISH":
-            self.character = "BEARISH"
+            new_character = "BEARISH"
+        else:
+            return None
+
+        self.leg_index += 1
+        self.reset_leg(new_character)
+        return f"leg reset: {prev_character} → {new_character} after {choch}"
 
 
 def _resolve_structure_event(
@@ -263,7 +270,7 @@ def _resolve_structure_event(
                     f"close above last LH={choch_level:.8f} in bearish structure (first CHOCH)"
                 )
             else:
-                reasons.append("bullish close break after CHOCH already fired in leg")
+                reasons.append("CHOCH suppressed: already fired in current leg")
         elif character == "BULLISH" and bos_level is not None:
             bos = "BOS_BULLISH"
             broken_level = bos_level
@@ -290,7 +297,7 @@ def _resolve_structure_event(
                     f"close below last HL={choch_level:.8f} in bullish structure (first CHOCH)"
                 )
             else:
-                reasons.append("bearish close break after CHOCH already fired in leg")
+                reasons.append("CHOCH suppressed: already fired in current leg")
         elif character == "BEARISH" and bos_level is not None:
             bos = "BOS_BEARISH"
             broken_level = bos_level
@@ -403,7 +410,9 @@ def _run_state_machine(candles, valid_highs, valid_lows):
                 bar_result["break_validity"] = "CHOCH"
 
         if bar_result["choch"] != "NONE":
-            sm.apply_choch(bar_result["choch"])
+            leg_reason = sm.apply_choch(bar_result["choch"])
+            if leg_reason:
+                bar_result["reasons"].append(leg_reason)
         elif bar_result["bos"] != "NONE":
             sm.structure_phase = "CONTINUATION"
             if bar_result["bos"] == "BOS_BULLISH":
@@ -511,6 +520,7 @@ def analyze_structure_events(candles):
         f"last_LH={last_lh}",
         f"structure_character={sm.character}",
         f"structure_phase={sm.structure_phase}",
+        f"leg_index={sm.leg_index}",
     ]
     reasons.extend(last_bar.get("reasons", []))
     reasons.extend(control_reasons)
@@ -558,4 +568,5 @@ def analyze_structure_events(candles):
         "last_hl": last_hl,
         "last_lh": last_lh,
         "structure_phase": sm.structure_phase,
+        "leg_index": sm.leg_index,
     }
