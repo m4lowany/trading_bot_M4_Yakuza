@@ -213,12 +213,15 @@ while True:
                 risk_level = "MEDIUM"
             reason = f"{reason} + fake breakout risk"
 
+        structure_events = analyze_structure_events(confirm_candles)
+
         setup_data = detect_setup(
             trend_tf,
             confirm_tf,
             entry_tf,
             price_action_data,
             fvg_data,
+            structure_events=structure_events,
         )
         setup_type = setup_data["setup_type"]
         setup_direction = setup_data["setup_direction"]
@@ -311,8 +314,6 @@ while True:
         for line in paper_logs:
             print(line)
 
-        # Observer only — after SIGNAL / paper decisions; not used in scoring or setup_engine.
-        structure_events = analyze_structure_events(candles)
         print(f"STRUCTURE_EVENT_BOS: {structure_events['bos']}")
         print(f"STRUCTURE_EVENT_CHOCH: {structure_events['choch']}")
         print(f"CONTROL_SHIFT: {structure_events['control_shift']}")

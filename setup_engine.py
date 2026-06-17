@@ -4,7 +4,9 @@ MTF setup classifier: bias (30m) + context (15m) + entry trigger (5m).
 Sits above the legacy alignment filter; does not replace scoring/signals.
 """
 
-from typing import Any, Dict
+from typing import Any, Dict, Optional
+
+from structure_confluence import apply_structure_confluence
 
 
 def _default_setup():
@@ -298,6 +300,7 @@ def detect_setup(
     entry_tf_data,
     price_action_data,
     fvg_data,
+    structure_events: Optional[Dict[str, Any]] = None,
 ):
     """
     Classify trade setup from MTF data and entry-level price action / FVG.
@@ -376,14 +379,17 @@ def detect_setup(
                 fake_breakout=fake_breakout,
                 alignment=alignment,
             )
-            return _apply_sideways_continuation_penalty(
-                {
-                    "setup_type": "TREND_CONTINUATION",
-                    "setup_direction": "BUY",
-                    "setup_quality": quality,
-                    "setup_reasons": setup_reasons,
-                },
-                entry_s,
+            return apply_structure_confluence(
+                _apply_sideways_continuation_penalty(
+                    {
+                        "setup_type": "TREND_CONTINUATION",
+                        "setup_direction": "BUY",
+                        "setup_quality": quality,
+                        "setup_reasons": setup_reasons,
+                    },
+                    entry_s,
+                ),
+                structure_events,
             )
 
     if trend_bias == "BEARISH" and confirm_bias != "BULLISH" and trend_msb_ok and confirm_msb_ok and alignment in ("FULL_BULLISH", "FULL_BEARISH"):
@@ -404,14 +410,17 @@ def detect_setup(
                 fake_breakout=fake_breakout,
                 alignment=alignment,
             )
-            return _apply_sideways_continuation_penalty(
-                {
-                    "setup_type": "TREND_CONTINUATION",
-                    "setup_direction": "SELL",
-                    "setup_quality": quality,
-                    "setup_reasons": setup_reasons,
-                },
-                entry_s,
+            return apply_structure_confluence(
+                _apply_sideways_continuation_penalty(
+                    {
+                        "setup_type": "TREND_CONTINUATION",
+                        "setup_direction": "SELL",
+                        "setup_quality": quality,
+                        "setup_reasons": setup_reasons,
+                    },
+                    entry_s,
+                ),
+                structure_events,
             )
 
     # --- PULLBACK_ENTRY: MIXED alignment but pullback with trend + entry trigger ---
@@ -448,12 +457,15 @@ def detect_setup(
                     fake_breakout=fake_breakout,
                     alignment=alignment,
                 )
-                return {
-                    "setup_type": "PULLBACK_ENTRY",
-                    "setup_direction": "BUY",
-                    "setup_quality": quality,
-                    "setup_reasons": setup_reasons,
-                }
+                return apply_structure_confluence(
+                    {
+                        "setup_type": "PULLBACK_ENTRY",
+                        "setup_direction": "BUY",
+                        "setup_quality": quality,
+                        "setup_reasons": setup_reasons,
+                    },
+                    structure_events,
+                )
 
         bullish_fvg_pb_short = (
             fvg_data.get("fvg_type") == "BULLISH"
@@ -493,12 +505,15 @@ def detect_setup(
                     fake_breakout=fake_breakout,
                     alignment=alignment,
                 )
-                return {
-                    "setup_type": "PULLBACK_ENTRY",
-                    "setup_direction": "SELL",
-                    "setup_quality": quality,
-                    "setup_reasons": setup_reasons,
-                }
+                return apply_structure_confluence(
+                    {
+                        "setup_type": "PULLBACK_ENTRY",
+                        "setup_direction": "SELL",
+                        "setup_quality": quality,
+                        "setup_reasons": setup_reasons,
+                    },
+                    structure_events,
+                )
 
     # --- REVERSAL_ATTEMPT: elevated reversal chance + entry trigger against weak trend ---
 
@@ -527,12 +542,15 @@ def detect_setup(
             )
             if quality == "HIGH":
                 quality = "MEDIUM"
-            return {
-                "setup_type": "REVERSAL_ATTEMPT",
-                "setup_direction": "BUY",
-                "setup_quality": quality,
-                "setup_reasons": setup_reasons,
-            }
+            return apply_structure_confluence(
+                {
+                    "setup_type": "REVERSAL_ATTEMPT",
+                    "setup_direction": "BUY",
+                    "setup_quality": quality,
+                    "setup_reasons": setup_reasons,
+                },
+                structure_events,
+            )
 
         if (
             trend_bias == "BULLISH"
@@ -557,12 +575,15 @@ def detect_setup(
             )
             if quality == "HIGH":
                 quality = "MEDIUM"
-            return {
-                "setup_type": "REVERSAL_ATTEMPT",
-                "setup_direction": "SELL",
-                "setup_quality": quality,
-                "setup_reasons": setup_reasons,
-            }
+            return apply_structure_confluence(
+                {
+                    "setup_type": "REVERSAL_ATTEMPT",
+                    "setup_direction": "SELL",
+                    "setup_quality": quality,
+                    "setup_reasons": setup_reasons,
+                },
+                structure_events,
+            )
 
     # Full signal alignment with entry trigger only (edge: entry WAIT but triggers)
     if (
@@ -583,14 +604,17 @@ def detect_setup(
             fake_breakout=fake_breakout,
             alignment=alignment,
         )
-        return _apply_sideways_continuation_penalty(
-            {
-                "setup_type": "TREND_CONTINUATION",
-                "setup_direction": "BUY",
-                "setup_quality": quality,
-                "setup_reasons": setup_reasons,
-            },
-            entry_s,
+        return apply_structure_confluence(
+            _apply_sideways_continuation_penalty(
+                {
+                    "setup_type": "TREND_CONTINUATION",
+                    "setup_direction": "BUY",
+                    "setup_quality": quality,
+                    "setup_reasons": setup_reasons,
+                },
+                entry_s,
+            ),
+            structure_events,
         )
 
     if (
@@ -611,14 +635,17 @@ def detect_setup(
             fake_breakout=fake_breakout,
             alignment=alignment,
         )
-        return _apply_sideways_continuation_penalty(
-            {
-                "setup_type": "TREND_CONTINUATION",
-                "setup_direction": "SELL",
-                "setup_quality": quality,
-                "setup_reasons": setup_reasons,
-            },
-            entry_s,
+        return apply_structure_confluence(
+            _apply_sideways_continuation_penalty(
+                {
+                    "setup_type": "TREND_CONTINUATION",
+                    "setup_direction": "SELL",
+                    "setup_quality": quality,
+                    "setup_reasons": setup_reasons,
+                },
+                entry_s,
+            ),
+            structure_events,
         )
 
     return {
