@@ -3,3 +3,9 @@ __pycache__/
 *.pyc
 .env
 logs/
+
+# Private / external notes
+notes/yakuza_knowlege/
+*.env
+.env
+venv/
