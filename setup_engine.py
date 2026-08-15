@@ -667,11 +667,26 @@ def resolve_paper_from_setup(
     liquidity_event,
 ):
     """
-    When legacy signal is WAIT, allow paper layer to use setup_engine suggestion.
-    Does not change the displayed SIGNAL (MTF filter preserved).
+    Resolve paper-layer decision fields separately from the displayed MTF SIGNAL.
 
-    TREND_CONTINUATION respects trade_allowed (e.g. MIXED alignment blocks paper open).
+    Dual path (observability — both sides should be logged in setup snapshots):
+    - signal path: signal / signal_confidence / entry_quality / trade_allowed
+    - paper path: paper_signal / paper_confidence / paper_entry_quality /
+      paper_trade_allowed / paper_source
+
+    When setup_type is NO_SETUP (or liquidity_event), paper_* passthrough equals
+    the signal path and paper_source="signal". Paper open is still allowed if
+    signal-path gates pass — NO_SETUP does not by itself block opens.
+
+    When SIGNAL==WAIT and setup quality is MEDIUM/HIGH with BUY/SELL direction,
+    paper may override: paper_signal=setup_direction, paper_entry_quality=
+    setup_quality, paper_confidence boosted to at least 3 (MEDIUM) or 4 (HIGH),
+    paper_source="setup_engine:{setup_type}".
+
+    TREND_CONTINUATION respects trade_allowed (e.g. MIXED alignment blocks paper).
     Other setup types keep prior override behavior when setup quality passes.
+
+    Does not change the displayed SIGNAL (MTF filter preserved).
     """
     paper_signal = signal
     paper_trade_allowed = trade_allowed

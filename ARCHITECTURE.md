@@ -106,7 +106,19 @@ Testy pomocnicze (nie część runtime bota): `test_structure_events_snapshot.py
 - `TREND_CONTINUATION` — 30m+15m zgodne + trigger na 5m.
 - `PULLBACK_ENTRY` — MIXED, ale pullback zgodny z biasem.
 - `REVERSAL_ATTEMPT` — reversal_chance + trigger przeciw trendowi.
-- `resolve_paper_from_setup()` — przy `SIGNAL==WAIT` może ustawić `paper_signal` (MEDIUM/HIGH).
+- `resolve_paper_from_setup()` — przy `SIGNAL==WAIT` może ustawić `paper_signal` (MEDIUM/HIGH) i **boost** `paper_confidence` / `paper_entry_quality`.
+- Przy `NO_SETUP` paper path = signal path (`paper_source="signal"`); open nadal możliwy, jeśli bramki signal przejdą.
+
+### Snapshot dual-path (`setup_history.jsonl`)
+
+Każdy snapshot powinien rozróżniać:
+
+| Pole | Znaczenie |
+|------|-----------|
+| `signal` / `signal_confidence` / `entry_quality` | Ścieżka MTF (wyświetlany SIGNAL) |
+| `paper_signal` / `paper_confidence` / `paper_entry_quality` / `paper_trade_allowed` / `paper_source` | Wartości użyte przez `paper_trader` |
+
+**Analityka:** nie porównuj `signal_confidence` ze snapu do `trade.confidence` przy `paper_source=setup_engine:*`. Autorytatywne dla open: `paper_trades.json` → `confidence` / `entry_quality` oraz snapshot `paper_*`.
 
 ---
 

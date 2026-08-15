@@ -107,10 +107,21 @@ def save_setup_snapshot(
     confidence_reasons: List[str],
     structure_events: Optional[Dict[str, Any]] = None,
     only_when_paper_signal: bool = False,
+    paper_confidence: Optional[int] = None,
+    paper_entry_quality: Optional[str] = None,
+    paper_source: Optional[str] = None,
 ) -> None:
     """
     Append one JSON snapshot per line to logs/setup_history.jsonl.
     By default logs every iteration; set only_when_paper_signal=True to skip WAIT paper rows.
+
+    Dual-path observability (does not affect trading logic):
+    - signal_confidence / entry_quality — legacy MTF signal path
+    - paper_confidence / paper_entry_quality / paper_source — values used by paper_trader
+      (may differ after resolve_paper_from_setup boost/override)
+
+    When paper_* args are omitted, they default to the signal-path equivalents
+    and paper_source="signal" (safe for older callers / tests).
 
     Pass structure_events=analyze_structure_events(candles) for observer fields;
     does not affect trading logic elsewhere.
@@ -124,6 +135,14 @@ def save_setup_snapshot(
         else structure_event_snapshot_fields({})
     )
 
+    resolved_paper_confidence = (
+        int(paper_confidence) if paper_confidence is not None else int(signal_confidence)
+    )
+    resolved_paper_entry_quality = (
+        paper_entry_quality if paper_entry_quality is not None else entry_quality
+    )
+    resolved_paper_source = paper_source if paper_source is not None else "signal"
+
     record = {
         "timestamp": timestamp,
         "symbol": symbol,
@@ -131,6 +150,9 @@ def save_setup_snapshot(
         "signal": signal,
         "paper_signal": paper_signal,
         "paper_trade_allowed": paper_trade_allowed,
+        "paper_confidence": resolved_paper_confidence,
+        "paper_entry_quality": resolved_paper_entry_quality,
+        "paper_source": resolved_paper_source,
         "setup_type": setup_type,
         "setup_direction": setup_direction,
         "setup_quality": setup_quality,
@@ -285,7 +307,55 @@ def _apply_structure_fields_from_snapshot(
     )
 
 
+def _apply_paper_observability_from_snapshot(
+    target: Dict[str, Any], snap: Optional[Dict[str, Any]]
+) -> None:
+    """
+    Attach snapshot paper_* / signal_* audit fields for analytics.
+
+    Never overwrites trade.confidence or trade.entry_quality — those are the
+    values actually used at paper open (authoritative for execution history).
+    """
+    if not snap:
+        target.setdefault("paper_confidence", "UNKNOWN")
+        target.setdefault("paper_entry_quality", "UNKNOWN")
+        target.setdefault("paper_source", "UNKNOWN")
+        target.setdefault("snapshot_signal_confidence", "UNKNOWN")
+        target.setdefault("snapshot_entry_quality", "UNKNOWN")
+        return
+
+    if "paper_confidence" in snap and snap["paper_confidence"] is not None:
+        target["paper_confidence"] = snap["paper_confidence"]
+    else:
+        target["paper_confidence"] = "UNKNOWN"
+
+    if "paper_entry_quality" in snap and snap["paper_entry_quality"] is not None:
+        target["paper_entry_quality"] = snap["paper_entry_quality"]
+    else:
+        target["paper_entry_quality"] = "UNKNOWN"
+
+    if "paper_source" in snap and snap["paper_source"] is not None:
+        target["paper_source"] = snap["paper_source"]
+    else:
+        # Infer for pre-observability history from trade reason suffix.
+        from_reason = _setup_type_from_reason(str(target.get("reason", "")))
+        target["paper_source"] = (
+            f"setup_engine:{from_reason}" if from_reason else "UNKNOWN"
+        )
+
+    target["snapshot_signal_confidence"] = snap.get("signal_confidence", "UNKNOWN")
+    target["snapshot_entry_quality"] = snap.get("entry_quality", "UNKNOWN")
+
+
 def _enrich_trade(trade: Dict[str, Any], snapshots: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    Join closed paper trade with entry snapshot for analytics.
+
+    Preserves trade.confidence / trade.entry_quality (paper open decision).
+    Adds setup/structure fields and paper_* observability from the snapshot.
+    Do not compare snapshot signal_confidence to trade.confidence for
+    setup_engine overrides — use paper_confidence / trade.confidence instead.
+    """
     enriched = dict(trade)
     snap = _match_snapshot_for_trade(trade, snapshots)
     if snap:
@@ -293,12 +363,14 @@ def _enrich_trade(trade: Dict[str, Any], snapshots: List[Dict[str, Any]]) -> Dic
         enriched["setup_quality"] = snap.get("setup_quality", "UNKNOWN")
         enriched["tf_alignment"] = snap.get("tf_alignment", "UNKNOWN")
         _apply_structure_fields_from_snapshot(enriched, snap)
+        _apply_paper_observability_from_snapshot(enriched, snap)
     else:
         from_reason = _setup_type_from_reason(str(trade.get("reason", "")))
         enriched["setup_type"] = from_reason or "UNKNOWN"
         enriched["setup_quality"] = trade.get("entry_quality", "UNKNOWN")
         enriched["tf_alignment"] = "UNKNOWN"
         _apply_structure_fields_from_snapshot(enriched, None)
+        _apply_paper_observability_from_snapshot(enriched, None)
     return enriched
 
 
