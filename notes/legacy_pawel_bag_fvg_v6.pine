@@ -1,0 +1,39 @@
+//@version=6
+indicator("SMC: Paweł BAG & Specyficzny FVG v6", overlay=true, max_boxes_count=500)
+
+// --- FUNKCJA SPRAWDZAJĄCA KOLOR ---
+is_green(index) => close[index] > open[index]
+is_red(index)   => close[index] < open[index]
+
+// --- LOGIKA DLA SCENARIUSZA WZROSTOWEGO (Zielone świece) ---
+// 1. Trzy zielone świece pod rząd
+bool three_green = is_green(0) and is_green(1) and is_green(2)
+
+// 2. FVG Pawła: Ciało 3. świecy (close[0]) zamyka się powyżej ciała 2. świecy (close[1]),
+// ale wewnątrz jej górnego knotu (poniżej lub równe high[1])
+bool fvg_bull = three_green and close[0] > close[1] and close[0] <= high[1]
+
+// --- LOGIKA DLA SCENARIUSZA SPADKOWEGO (Czerwone świece) ---
+// 1. Trzy czerwone świece pod rząd
+bool three_red = is_red(0) and is_red(1) and is_red(2)
+
+// 2. FVG Pawła: Ciało 3. świecy (close[0]) zamyka się poniżej ciała 2. świecy (close[1]),
+// ale wewnątrz jej dolnego knotu (powyżej lub równe low[1])
+bool fvg_bear = three_red and close[0] < close[1] and close[0] >= low[1]
+
+// --- RYSOWANIE I POWIADOMIENIA ---
+if fvg_bull
+    // Rysujemy strefę FVG/BAG
+    box.new(bar_index[1], high[1], bar_index + 10, close[1],
+         bgcolor=color.new(color.green, 85), border_color=color.green)
+    label.new(bar_index, high[1], "BAG/FVG ↑", style=label.style_label_down, color=color.green, textcolor=color.white, size=size.small)
+
+if fvg_bear
+    // Rysujemy strefę FVG/BAG
+    box.new(bar_index[1], low[1], bar_index + 10, close[1],
+         bgcolor=color.new(color.red, 85), border_color=color.red)
+    label.new(bar_index, low[1], "BAG/FVG ↓", style=label.style_label_up, color=color.red, textcolor=color.white, size=size.small)
+
+// Sygnały wizualne (trójkąty) pod/nad świecami
+plotshape(fvg_bull, title="BAG Up", location=location.belowbar, color=color.green, style=shape.triangleup, size=size.small)
+plotshape(fvg_bear, title="BAG Down", location=location.abovebar, color=color.red, style=shape.triangledown, size=size.small)
