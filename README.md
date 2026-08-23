@@ -174,6 +174,20 @@ python3 main.py
 
 - [ ] Integracja alertów TradingView (opcjonalnie)
 
+## Runtime V1 (local paper process)
+
+Safe start/stop/status/logs wrappers — **no strategy changes**. Do not run two `main.py` instances.
+
+```bash
+./scripts/start_bot.sh    # refuses if already running
+./scripts/status_bot.sh
+./scripts/logs_bot.sh     # Ctrl+C = stop tail only
+./scripts/stop_bot.sh     # verifies cmdline/cwd; use --force only for manual starts
+```
+
+- Managed log: `logs/runs/live_run.log` · PID file: `logs/runs/yakuza_paper.pid`
+- Legacy manual log (if used): `live_run.log` at repo root
+
 ## Dokumentacja strategii
 
 - [`notes/yakuza_strategy_core.md`](notes/yakuza_strategy_core.md) — pełna filozofia Yakuza, TF docelowe, ryzyko, czego unikać.

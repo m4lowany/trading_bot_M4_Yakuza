@@ -4,6 +4,9 @@ __pycache__/
 .env
 logs/
 
+# Manual / ad-hoc run log at repo root (Runtime V1 uses logs/runs/)
+live_run.log
+
 # Private / external notes
 notes/yakuza_knowlege/
 *.env
