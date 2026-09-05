@@ -28,6 +28,7 @@ from paper_trader import process_paper_trading
 from setup_engine import detect_setup, resolve_paper_from_setup
 from setup_stats import save_setup_snapshot
 from structure_events import analyze_structure_events
+from training_data import build_entry_training_context
 from utils import validate_candles, validate_timeframes
 
 TREND_TIMEFRAME, CONFIRM_TIMEFRAME, ENTRY_TIMEFRAME = validate_timeframes(
@@ -298,6 +299,33 @@ while True:
         if paper_source != "signal":
             paper_reason = f"{reason} | {paper_source}"
 
+        # Observation-only open-time feature capture for training samples.
+        training_context = build_entry_training_context(
+            symbol=SYMBOL,
+            score=score,
+            signal=signal,
+            signal_confidence=signal_confidence,
+            entry_quality=entry_quality,
+            tf_alignment=tf_alignment,
+            alignment_strength=alignment_strength,
+            setup_type=setup_type,
+            setup_direction=setup_direction,
+            setup_quality=setup_quality,
+            setup_reasons=setup_reasons,
+            paper_source=paper_source,
+            paper_confidence=paper_confidence,
+            paper_entry_quality=paper_entry_quality,
+            structure_data=structure_data,
+            price_action_data=price_action_data,
+            fvg_data=fvg_data,
+            indicator_status=indicator_status,
+            structure_events=structure_events,
+            risk_level=risk_level,
+            trend_timeframe=TREND_TIMEFRAME,
+            confirm_timeframe=CONFIRM_TIMEFRAME,
+            entry_timeframe=ENTRY_TIMEFRAME,
+        )
+
         paper_logs = process_paper_trading(
             log_dir,
             current_price=price,
@@ -310,6 +338,7 @@ while True:
             target_profit_percent=dynamic_risk["target_profit_percent"],
             reason=paper_reason,
             timestamp=timestamp,
+            training_context=training_context,
         )
         for line in paper_logs:
             print(line)

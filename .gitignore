@@ -12,3 +12,7 @@ notes/yakuza_knowlege/
 *.env
 .env
 venv/
+
+# Training dataset (append-only runtime output; keep directory)
+data/training/*.jsonl
+!data/training/.gitkeep

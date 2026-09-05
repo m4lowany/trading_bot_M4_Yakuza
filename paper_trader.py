@@ -11,6 +11,23 @@ MIXED_ALIGNMENT_CLOSE_ITERATIONS = 3
 ALIGNMENT_MIXED_WARNING = "alignment mixed warning"
 
 
+def _import_training_data():
+    """Import training_data with repo-local path fallback (CWD-independent)."""
+    try:
+        import training_data as td
+
+        return td
+    except ImportError:
+        import sys
+
+        here = os.path.dirname(os.path.abspath(__file__))
+        if here not in sys.path:
+            sys.path.insert(0, here)
+        import training_data as td
+
+        return td
+
+
 def _trades_path(log_dir: str) -> str:
     return os.path.join(log_dir, "paper_trades.json")
 
@@ -97,12 +114,13 @@ def open_paper_trade(
     reason: str,
     timestamp: Optional[str] = None,
     stop_loss_percent: Optional[float] = None,
+    training_context: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     ts = timestamp or datetime.now().isoformat()
     sl = stop_loss_percent if stop_loss_percent is not None else _stop_loss_percent(
         target_profit_percent
     )
-    return {
+    trade = {
         "side": side,
         "entry_price": entry_price,
         "current_price": entry_price,
@@ -117,17 +135,50 @@ def open_paper_trade(
         "mixed_alignment_streak": 0,
         "alignment_warning": None,
     }
+    # Observation-only path tracker + optional open-time feature context.
+    try:
+        td = _import_training_data()
+        trade["path_tracker"] = td.init_path_tracker(
+            side=side, entry_price=float(entry_price), timestamp=ts
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(f"TRAINING_LOGGER_ERROR: init_path_tracker failed: {type(exc).__name__}: {exc}")
+    if training_context is not None:
+        trade["training_context"] = deepcopy(training_context)
+    return trade
 
 
 def update_paper_trade(
     trade: Dict[str, Any],
     current_price: float,
+    *,
+    timestamp: Optional[str] = None,
 ) -> Dict[str, Any]:
     updated = deepcopy(trade)
     updated["current_price"] = current_price
     updated["unrealized_pnl_percent"] = _calc_pnl_percent(
         updated["side"], updated["entry_price"], current_price
     )
+    # Observation-only MAE/MFE path update — never affects close/open decisions.
+    try:
+        td = _import_training_data()
+        ts = timestamp or datetime.now().isoformat()
+        path = updated.get("path_tracker")
+        if not path:
+            path = td.init_path_tracker(
+                side=updated["side"],
+                entry_price=float(updated["entry_price"]),
+                timestamp=str(updated.get("timestamp") or ts),
+            )
+        updated["path_tracker"] = td.update_path_tracker(
+            path,
+            side=updated["side"],
+            entry_price=float(updated["entry_price"]),
+            price=float(current_price),
+            timestamp=ts,
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(f"TRAINING_LOGGER_ERROR: update_path_tracker failed: {type(exc).__name__}: {exc}")
     return updated
 
 
@@ -214,6 +265,30 @@ def close_paper_trade(
     closed["pnl_percent_leveraged"] = round(
         pnl * max(int(closed.get("leverage", 1)), 1), 4
     )
+    # Finalize path labels onto closed trade (observation only).
+    try:
+        td = _import_training_data()
+        path = closed.get("path_tracker")
+        if path:
+            path = td.update_path_tracker(
+                path,
+                side=closed["side"],
+                entry_price=float(closed["entry_price"]),
+                price=float(exit_price),
+                timestamp=closed["closed_at"],
+            )
+            closed["path_tracker"] = path
+        metrics = td.finalize_path_metrics(path, opened_at=closed.get("timestamp"))
+        closed["mae_percent"] = metrics.get("mae_percent")
+        closed["mfe_percent"] = metrics.get("mfe_percent")
+        closed["max_adverse_price"] = metrics.get("max_adverse_price")
+        closed["max_favorable_price"] = metrics.get("max_favorable_price")
+        closed["time_to_mae_seconds"] = metrics.get("time_to_mae_seconds")
+        closed["time_to_mfe_seconds"] = metrics.get("time_to_mfe_seconds")
+    except Exception as exc:  # noqa: BLE001
+        print(f"TRAINING_LOGGER_ERROR: finalize_path_metrics failed: {type(exc).__name__}: {exc}")
+        closed.setdefault("mae_percent", None)
+        closed.setdefault("mfe_percent", None)
     return closed
 
 
@@ -266,10 +341,14 @@ def process_paper_trading(
     target_profit_percent: float,
     reason: str,
     timestamp: Optional[str] = None,
+    training_context: Optional[Dict[str, Any]] = None,
 ) -> List[str]:
     """
     Jedna iteracja paper tradingu: update / close / open.
     Zwraca listę linii do wydruku (PAPER_TRADE_OPEN, PAPER_TRADE_CLOSE, PAPER_PNL_PERCENT).
+
+    Optional training_context is observation-only (stored on open for later labeling).
+    Trading decisions are unchanged by training logger success/failure.
     """
     ts = timestamp or datetime.now().isoformat()
     state = load_paper_state(log_dir)
@@ -279,7 +358,7 @@ def process_paper_trading(
     closed_this_iteration = False
 
     if active is not None:
-        active = update_paper_trade(active, current_price)
+        active = update_paper_trade(active, current_price, timestamp=ts)
         close_reason = close_reason_for_trade(
             active,
             current_price=current_price,
@@ -314,6 +393,27 @@ def process_paper_trading(
                 f"PAPER_PNL_PERCENT: {closed['pnl_percent']} "
                 f"(leveraged: {closed['pnl_percent_leveraged']})"
             )
+            if closed.get("mae_percent") is not None or closed.get("mfe_percent") is not None:
+                logs.append(
+                    f"PAPER_PATH: mae%={closed.get('mae_percent')} "
+                    f"mfe%={closed.get('mfe_percent')}"
+                )
+            try:
+                td = _import_training_data()
+                ok, err = td.safe_record_closed_trade(
+                    log_dir=log_dir, closed_trade=closed, source="live"
+                )
+                if not ok:
+                    print(f"TRAINING_LOGGER_ERROR: emit sample failed: {err}")
+                    logs.append(f"TRAINING_LOGGER_ERROR: {err}")
+                else:
+                    logs.append("TRAINING_SAMPLE: appended")
+            except Exception as exc:  # noqa: BLE001
+                print(
+                    f"TRAINING_LOGGER_ERROR: safe_record_closed_trade crashed: "
+                    f"{type(exc).__name__}: {exc}"
+                )
+                logs.append(f"TRAINING_LOGGER_ERROR: {type(exc).__name__}: {exc}")
         else:
             state["active_trade"] = active
             logs.append(
@@ -339,6 +439,7 @@ def process_paper_trading(
             target_profit_percent=target_profit_percent,
             reason=reason,
             timestamp=ts,
+            training_context=training_context,
         )
         state["active_trade"] = new_trade
         logs.append(format_paper_log("PAPER_TRADE_OPEN", new_trade))
