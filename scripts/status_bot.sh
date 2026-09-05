@@ -7,40 +7,58 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/runtime_common.sh"
 
 pids="$(runtime_find_yakuza_pids || true)"
 file_pid="$(runtime_read_pidfile || true)"
+pf_status="$(runtime_pidfile_status)"
 
 echo "=== YAKUZA Runtime V1 status ==="
 echo "Repo: ${REPO_ROOT}"
 
 if [[ -n "${pids}" ]]; then
-  echo "State: RUNNING"
   # WAIT / NO_SETUP is normal — not an error.
   echo "Note: WAIT / NO_SETUP means runtime is healthy but no paper trade — not an error."
+  managed=0
   while IFS= read -r pid; do
     [[ -n "${pid}" ]] || continue
     cmd="$(tr '\0' ' ' < "/proc/${pid}/cmdline" 2>/dev/null || echo '?')"
+    exe="$(readlink -f "/proc/${pid}/exe" 2>/dev/null || echo '?')"
     etime="$(ps -p "${pid}" -o etime= 2>/dev/null | tr -d ' ' || echo '?')"
-    echo "PID:     ${pid}"
-    echo "Uptime:  ${etime}"
-    echo "Command: ${cmd}"
-    if [[ -n "${file_pid}" && "${file_pid}" == "${pid}" ]]; then
-      echo "PID file: ${PID_FILE} (matches)"
-    elif [[ -n "${file_pid}" ]]; then
-      echo "PID file: ${PID_FILE} -> ${file_pid} (mismatch / stale vs live)"
+    if [[ -n "${file_pid}" && "${file_pid}" == "${pid}" && "${pf_status}" == "VALID_MANAGED" ]]; then
+      echo "State: RUNNING_MANAGED"
+      managed=1
+      echo "PID:     ${pid}"
+      echo "Uptime:  ${etime}"
+      echo "Exe:     ${exe}"
+      echo "Command: ${cmd}"
+      echo "PID file: ${PID_FILE} (matches verified process)"
     else
-      echo "PID file: (none — likely manual start)"
+      echo "State: RUNNING_MANUAL"
+      echo "PID:     ${pid}"
+      echo "Uptime:  ${etime}"
+      echo "Exe:     ${exe}"
+      echo "Command: ${cmd}"
+      if [[ -n "${file_pid}" ]]; then
+        echo "PID file: ${PID_FILE} -> ${file_pid} (${pf_status})"
+      else
+        echo "PID file: (none — manual start)"
+      fi
     fi
   done <<< "${pids}"
 else
-  echo "State: STOPPED"
-  if [[ -n "${file_pid}" ]]; then
-    if [[ -d "/proc/${file_pid}" ]]; then
-      echo "PID file: ${PID_FILE} -> ${file_pid} (LIVE but NOT verified as this repo main.py — stale risk)"
-    else
-      echo "PID file: ${PID_FILE} -> ${file_pid} (stale — process gone)"
-    fi
-  else
-    echo "PID file: (none)"
-  fi
+  case "${pf_status}" in
+    STALE_GONE|STALE_INVALID)
+      echo "State: STALE_PID"
+      echo "PID file: ${PID_FILE} -> ${file_pid} (${pf_status})"
+      if [[ "${pf_status}" == "STALE_INVALID" && -d "/proc/${file_pid}" ]]; then
+        echo "  live exe:     $(readlink -f "/proc/${file_pid}/exe" 2>/dev/null || echo '?')"
+        echo "  live cmdline: $(tr '\0' ' ' < "/proc/${file_pid}/cmdline" 2>/dev/null || echo '?')"
+        echo "  live cwd:     $(readlink -f "/proc/${file_pid}/cwd" 2>/dev/null || echo '?')"
+        echo "  Not a verified YAKUZA python main.py — will not be treated as RUNNING."
+      fi
+      ;;
+    *)
+      echo "State: STOPPED"
+      echo "PID file: (none)"
+      ;;
+  esac
 fi
 
 echo "---"

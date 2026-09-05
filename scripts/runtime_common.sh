@@ -27,31 +27,122 @@ runtime_python() {
   fi
 }
 
-# True if PID is this repo's main.py (cmdline + cwd). Never trust PID alone.
+# True if basename looks like a Python interpreter (python, python3, python3.12, ...).
+runtime_is_python_basename() {
+  local base="${1:-}"
+  [[ "${base}" =~ ^python([0-9]+(\.[0-9]+)*)?$ ]]
+}
+
+# Resolve script path relative to cwd (absolute paths unchanged).
+runtime_resolve_script() {
+  local cwd="${1:-}"
+  local script="${2:-}"
+  if [[ -z "${script}" ]]; then
+    return 1
+  fi
+  if [[ "${script}" == /* ]]; then
+    readlink -f "${script}" 2>/dev/null || echo "${script}"
+    return 0
+  fi
+  if [[ -n "${cwd}" && -d "${cwd}" ]]; then
+    readlink -f "${cwd}/${script}" 2>/dev/null || echo "${cwd}/${script}"
+    return 0
+  fi
+  return 1
+}
+
+# Core identity check — pure inputs (testable without /proc).
+# Args: exe_path cwd argv0 [argv1 ...]
+# MATCH only if:
+#   - exe basename is python/python3/pythonX.Y
+#   - a real script argument is main.py (not -c payload / shell string)
+#   - resolved script path equals this repo's MAIN_PY
+runtime_match_bot_identity() {
+  local exe="${1:-}"
+  local cwd="${2:-}"
+  shift 2 || true
+  local -a argv=("$@")
+
+  local base
+  base="$(basename "${exe}" 2>/dev/null || echo "")"
+  runtime_is_python_basename "${base}" || return 1
+
+  if [[ ${#argv[@]} -eq 0 ]]; then
+    return 1
+  fi
+
+  local i=1
+  local arg
+  # Skip argv[0] (interpreter). Walk flags until first non-option = script.
+  while [[ ${i} -lt ${#argv[@]} ]]; do
+    arg="${argv[$i]}"
+    if [[ "${arg}" == "-c" || "${arg}" == "-m" ]]; then
+      # -c/-m means not executing main.py as a file script.
+      return 1
+    fi
+    if [[ "${arg}" == "--" ]]; then
+      i=$((i + 1))
+      break
+    fi
+    if [[ "${arg}" == -* ]]; then
+      # Common interpreter flags: -u -O -B -S -I -E -X...
+      i=$((i + 1))
+      continue
+    fi
+    break
+  done
+
+  if [[ ${i} -ge ${#argv[@]} ]]; then
+    return 1
+  fi
+
+  arg="${argv[$i]}"
+  # Require script token to be main.py or */main.py (not a larger string).
+  if [[ "${arg}" != "main.py" && "${arg}" != */main.py ]]; then
+    return 1
+  fi
+
+  local resolved
+  resolved="$(runtime_resolve_script "${cwd}" "${arg}")" || return 1
+  [[ "${resolved}" == "${MAIN_PY}" ]] || return 1
+  return 0
+}
+
+# Read /proc identity and validate. Never trust PID alone or substring grep.
 runtime_is_yakuza_main() {
   local pid="${1:-}"
   [[ -n "${pid}" && "${pid}" =~ ^[0-9]+$ ]] || return 1
   [[ -d "/proc/${pid}" ]] || return 1
-  local cmdline cwd
-  cmdline="$(tr '\0' ' ' < "/proc/${pid}/cmdline" 2>/dev/null || true)"
+  [[ -r "/proc/${pid}/cmdline" ]] || return 1
+
+  local exe cwd
+  exe="$(readlink -f "/proc/${pid}/exe" 2>/dev/null || true)"
   cwd="$(readlink -f "/proc/${pid}/cwd" 2>/dev/null || true)"
-  [[ "${cwd}" == "${REPO_ROOT}" ]] || return 1
-  # Accept "python3 main.py", "python main.py", ".../venv/bin/python main.py"
-  [[ "${cmdline}" == *main.py* ]] || return 1
-  return 0
+  [[ -n "${exe}" ]] || return 1
+
+  local -a argv=()
+  # mapfile -d '' reads NUL-separated cmdline into argv entries.
+  if ! mapfile -d '' -t argv < "/proc/${pid}/cmdline" 2>/dev/null; then
+    return 1
+  fi
+  # Drop empty trailing element some bash versions append.
+  if [[ ${#argv[@]} -gt 0 && -z "${argv[-1]:-}" ]]; then
+    unset 'argv[-1]'
+  fi
+  [[ ${#argv[@]} -gt 0 ]] || return 1
+
+  runtime_match_bot_identity "${exe}" "${cwd}" "${argv[@]}"
 }
 
-# Print matching PIDs (one per line), empty if none.
+# Print matching PIDs (one per line), empty if none. Strict identity only.
 runtime_find_yakuza_pids() {
-  local pid cmdline cwd
+  local pid
   for pid in /proc/[0-9]*; do
     pid="${pid#/proc/}"
     [[ "${pid}" =~ ^[0-9]+$ ]] || continue
-    cmdline="$(tr '\0' ' ' < "/proc/${pid}/cmdline" 2>/dev/null || true)"
-    [[ "${cmdline}" == *main.py* ]] || continue
-    cwd="$(readlink -f "/proc/${pid}/cwd" 2>/dev/null || true)"
-    [[ "${cwd}" == "${REPO_ROOT}" ]] || continue
-    echo "${pid}"
+    if runtime_is_yakuza_main "${pid}"; then
+      echo "${pid}"
+    fi
   done
 }
 
@@ -65,11 +156,31 @@ runtime_read_pidfile() {
   echo "${raw}"
 }
 
+# Classify PID file vs live identity.
+# Prints one of: MISSING | VALID_MANAGED | STALE_GONE | STALE_INVALID
+runtime_pidfile_status() {
+  local file_pid
+  file_pid="$(runtime_read_pidfile || true)"
+  if [[ -z "${file_pid}" ]]; then
+    echo "MISSING"
+    return 0
+  fi
+  if ! [[ -d "/proc/${file_pid}" ]]; then
+    echo "STALE_GONE"
+    return 0
+  fi
+  if runtime_is_yakuza_main "${file_pid}"; then
+    echo "VALID_MANAGED"
+    return 0
+  fi
+  echo "STALE_INVALID"
+  return 0
+}
+
 # Echo path to active run log (managed preferred if newer/nonempty, else legacy).
 runtime_active_log() {
   if [[ -f "${MANAGED_LOG}" && -s "${MANAGED_LOG}" ]]; then
     if [[ -f "${LEGACY_LOG}" && -s "${LEGACY_LOG}" ]]; then
-      # Prefer whichever was written more recently while a process is live.
       if [[ "${MANAGED_LOG}" -nt "${LEGACY_LOG}" ]]; then
         echo "${MANAGED_LOG}"
         return 0
@@ -107,7 +218,6 @@ runtime_last_iteration() {
       return 0
     fi
   fi
-  # Prefer last ITERATION line from active/run or market log.
   local line
   line="$(rg -n '\[ITERATION [0-9]+\]' "${log}" 2>/dev/null | tail -1 || true)"
   if [[ -z "${line}" ]]; then
